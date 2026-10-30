@@ -15,10 +15,13 @@ app/services/download_models.py
 app/services/hosted_music.py
 app/services/pdf_import.py
 app/services/performance.py
+app/services/story_import.py
 app/workers/__init__.py
 storybook_audio_api.egg-info/PKG-INFO
 storybook_audio_api.egg-info/SOURCES.txt
 storybook_audio_api.egg-info/dependency_links.txt
 storybook_audio_api.egg-info/requires.txt
 storybook_audio_api.egg-info/top_level.txt
+tests/test_audio_rendering.py
 tests/test_story_analysis.py
+tests/test_story_import.py

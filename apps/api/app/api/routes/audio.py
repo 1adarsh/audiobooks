@@ -2,13 +2,14 @@ from pathlib import Path
 import subprocess
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.services.analysis_feedback import get_feedback, save_feedback
 from app.services.audio_rendering import get_audio_path, render_audio
 from app.services.character_casting import analyze_story
+from app.services.story_import import MAX_DOCUMENT_SIZE, extract_story_text
 
 router = APIRouter(tags=["audio"])
 
@@ -17,6 +18,14 @@ class AudioGenerationRequest(BaseModel):
     text: str = Field(min_length=1, max_length=120_000)
     title: str = Field(default="storybook-audio", min_length=1, max_length=120)
     chapter_count: int = Field(default=1, ge=1, le=12)
+    voice_style: Literal["gentle", "expressive"] = "gentle"
+
+
+class AudioSentenceTiming(BaseModel):
+    text: str
+    start: float
+    end: float
+    word_starts: list[float]
 
 
 class AudioGenerationResponse(BaseModel):
@@ -25,6 +34,12 @@ class AudioGenerationResponse(BaseModel):
     chapters: int
     audio_url: str
     download_url: str
+    timings: list[AudioSentenceTiming]
+
+
+class StoryImportResponse(BaseModel):
+    filename: str
+    text: str
 
 
 class StoryAnalysisRequest(BaseModel):
@@ -72,10 +87,24 @@ class AnalysisFeedbackResponse(BaseModel):
     status: str
 
 
+@router.post("/audio/import", response_model=StoryImportResponse)
+async def import_story(file: UploadFile = File(...)) -> StoryImportResponse:
+    filename = file.filename or ""
+    content = await file.read(MAX_DOCUMENT_SIZE + 1)
+    try:
+        text = extract_story_text(filename, content)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    return StoryImportResponse(filename=filename, text=text)
+
+
 @router.post("/audio/generate", response_model=AudioGenerationResponse)
 def generate_audio(request: AudioGenerationRequest) -> AudioGenerationResponse:
     try:
-        audio_id, chapter_total = render_audio(request.text, request.chapter_count)
+        audio_id, chapter_total, timings = render_audio(
+            request.text, request.chapter_count, request.voice_style
+        )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except RuntimeError as error:
@@ -94,6 +123,15 @@ def generate_audio(request: AudioGenerationRequest) -> AudioGenerationResponse:
         chapters=chapter_total,
         audio_url=f"/api/audio/{audio_id}",
         download_url=f"/api/audio/{audio_id}/download",
+        timings=[
+            AudioSentenceTiming(
+                text=timing.text,
+                start=timing.start,
+                end=timing.end,
+                word_starts=timing.word_starts,
+            )
+            for timing in timings
+        ],
     )
 
 

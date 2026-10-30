@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Animated,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -15,7 +16,10 @@ import type { PickedBook, PlaybackCue } from "../types";
 import {
   analyzeStory,
   generateAudio,
+  importStoryDocument,
+  type NarrationStyle,
   saveAnalysisFeedback,
+  type GeneratedAudio,
   type StoryAnalysis,
 } from "../../../services/api/client";
 
@@ -50,6 +54,13 @@ function buildGeneratedCues(bookName: string, chapterCountValue: string): Playba
       tone: tones[chapterIndex % tones.length],
     };
   });
+}
+
+function formatAudioTime(seconds: number): string {
+  const totalSeconds = Math.max(0, Math.floor(seconds));
+  return `${String(Math.floor(totalSeconds / 60)).padStart(2, "0")}:${String(
+    totalSeconds % 60,
+  ).padStart(2, "0")}`;
 }
 
 function buildStoryCues(storyText: string, chapterCountValue: string): PlaybackCue[] {
@@ -93,6 +104,7 @@ function buildStoryCues(storyText: string, chapterCountValue: string): PlaybackC
 export function HomeScreen() {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("story");
   const [chapterCount, setChapterCount] = useState("1");
+  const [voiceStyle, setVoiceStyle] = useState<NarrationStyle>("gentle");
   const [book, setBook] = useState<PickedBook | null>(null);
   const [pastedStory, setPastedStory] = useState("");
   const [pastedBookTitle, setPastedBookTitle] = useState("");
@@ -100,6 +112,8 @@ export function HomeScreen() {
   const [activeBookTitle, setActiveBookTitle] = useState("");
   const [storyAnalysis, setStoryAnalysis] = useState<StoryAnalysis | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importError, setImportError] = useState("");
   const [analysisMessage, setAnalysisMessage] = useState("");
   const [storyStatus, setStoryStatus] = useState("");
   const [isPlaying, setIsPlaying] = useState(false);
@@ -118,10 +132,12 @@ export function HomeScreen() {
   const [speedIndex, setSpeedIndex] = useState(1);
   const [loopChapter, setLoopChapter] = useState(true);
   const audioRef = useRef<Audio.Sound | null>(null);
+  const audioTimingsRef = useRef<GeneratedAudio["timings"]>([]);
   const durationRef = useRef(0);
   const lyricScrollRef = useRef<ScrollView>(null);
   const lyricOffsets = useRef<Record<number, number>>({});
   const progressWidth = useRef(0);
+  const conversionPulse = useRef(new Animated.Value(0.35)).current;
 
   const currentSpeed = playbackSpeeds[speedIndex];
   const bookTitle = useMemo(() => {
@@ -133,7 +149,7 @@ export function HomeScreen() {
       return "The Lantern Gate";
     }
 
-    return book.name.replace(/\.pdf$/i, "");
+    return book.name.replace(/\.(?:pdf|odt)$/i, "");
   }, [activeBookTitle, book, activeStoryText]);
 
   const generatedCues = useMemo(
@@ -155,14 +171,6 @@ export function HomeScreen() {
   }, [activeCueIndex, generatedCues]);
 
   const currentCue = generatedCues[activeCueIndex] ?? generatedCues[0];
-  const totalWords = useMemo(
-    () =>
-      generatedCues.reduce(
-        (total, cue) => total + (cue.text.match(/\S+/g)?.length ?? 0),
-        0,
-      ),
-    [generatedCues],
-  );
   const progress = audioUrl ? audioProgress : 0;
 
   useEffect(() => {
@@ -202,24 +210,36 @@ export function HomeScreen() {
     setAudioProgress(duration > 0 ? (position / duration) * 100 : 0);
     setIsPlaying(status.isPlaying);
 
-    if (totalWords > 0 && duration > 0) {
-      const currentGlobalWord = Math.min(
-        totalWords - 1,
-        Math.floor((position / duration) * totalWords),
+    const timings = audioTimingsRef.current;
+    if (duration > 0 && timings.length > 0) {
+      const positionSeconds = position / 1000;
+      let cueIndex = timings.findIndex(
+        (timing) =>
+          positionSeconds >= timing.start && positionSeconds <= timing.end,
       );
-      let wordOffset = currentGlobalWord;
-      const cueIndex = generatedCues.findIndex((cue) => {
-        const cueWordCount = cue.text.match(/\S+/g)?.length ?? 0;
-        if (wordOffset < cueWordCount) {
-          return true;
+      if (cueIndex < 0) {
+        for (let index = timings.length - 1; index >= 0; index -= 1) {
+          if (positionSeconds >= timings[index].start) {
+            cueIndex = index;
+            break;
+          }
         }
-        wordOffset -= cueWordCount;
-        return false;
-      });
+      }
 
-      if (cueIndex >= 0) {
+      if (cueIndex >= 0 && cueIndex < generatedCues.length) {
+        const timing = timings[cueIndex];
+        let wordIndex = -1;
+        if (positionSeconds <= timing.end) {
+          for (let index = 0; index < timing.wordStarts.length; index += 1) {
+            if (timing.wordStarts[index] <= positionSeconds) {
+              wordIndex = index;
+            } else {
+              break;
+            }
+          }
+        }
         setActiveCueIndex(cueIndex);
-        setActiveWordIndex(wordOffset);
+        setActiveWordIndex(wordIndex);
       }
     }
 
@@ -254,6 +274,30 @@ export function HomeScreen() {
     });
   }, [loopChapter]);
 
+  useEffect(() => {
+    if (conversionStage !== "rendering") {
+      conversionPulse.setValue(0.35);
+      return;
+    }
+
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.timing(conversionPulse, {
+          toValue: 1,
+          duration: 650,
+          useNativeDriver: true,
+        }),
+        Animated.timing(conversionPulse, {
+          toValue: 0.35,
+          duration: 650,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    pulse.start();
+    return () => pulse.stop();
+  }, [conversionPulse, conversionStage]);
+
   async function clearAudio() {
     const sound = audioRef.current;
     audioRef.current = null;
@@ -262,33 +306,67 @@ export function HomeScreen() {
     }
     setAudioUrl(null);
     setDownloadUrl(null);
+    audioTimingsRef.current = [];
     setAudioProgress(0);
     setIsPlaying(false);
     setActiveWordIndex(-1);
   }
 
   async function chooseBook() {
-    const result = await DocumentPicker.getDocumentAsync({
-      type: "application/pdf",
-      copyToCacheDirectory: true,
-    });
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: [
+          "application/pdf",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "application/vnd.oasis.opendocument.text",
+          "text/plain",
+          "text/markdown",
+          "text/html",
+        ],
+        copyToCacheDirectory: true,
+        base64: false,
+      });
 
-    if (!result.canceled) {
+      if (result.canceled) {
+        return;
+      }
       const file = result.assets[0];
       setBook({ name: file.name, uri: file.uri, size: file.size });
       setActiveStoryText("");
+      setPastedStory("");
+      setImportError("");
+      setStoryStatus("");
+      setIsImporting(true);
       try {
         await clearAudio();
-      } catch (error) {
-        setPlaybackMessage(
-          error instanceof Error ? error.message : "Unable to stop previous audio.",
+        const title = file.name.replace(
+          /\.(?:pdf|odt|docx|html?|md|markdown|txt|text)$/i,
+          "",
         );
-        return;
+        const imported = await importStoryDocument(file);
+        setPastedStory(imported.text);
+        setPastedBookTitle(title);
+        setActiveStoryText(imported.text);
+        setActiveBookTitle(title);
+        setStoryAnalysis(null);
+        setAnalysisMessage("");
+        setConversionError("");
+        setPlaybackMessage("");
+        setActiveCueIndex(0);
+        setStoryStatus(
+          `Imported ${imported.text.length.toLocaleString()} characters. Convert to audiobook when ready.`,
+        );
+      } catch (error) {
+        setImportError(
+          error instanceof Error ? error.message : "Unable to import this document.",
+        );
+      } finally {
+        setIsImporting(false);
       }
-      setStoryStatus(
-        "PDF selected. PDF text extraction is not available yet. Paste authorized story text below to convert it to audio.",
+    } catch (error) {
+      setImportError(
+        error instanceof Error ? error.message : "Unable to select a document.",
       );
-      setActiveCueIndex(0);
     }
   }
 
@@ -312,6 +390,7 @@ export function HomeScreen() {
     setActiveBookTitle(pastedBookTitle.trim() || "Pasted story");
     setStoryAnalysis(null);
     setAnalysisMessage("");
+    setImportError("");
     setConversionError("");
     setPlaybackMessage("");
     setActiveCueIndex(0);
@@ -435,7 +514,7 @@ export function HomeScreen() {
 
   async function convertStoryToAudio() {
     if (!activeStoryText.trim()) {
-      setPlaybackMessage("Paste your story and choose Use pasted story before converting.");
+      setPlaybackMessage("Paste or import your story before converting.");
       return;
     }
 
@@ -459,21 +538,36 @@ export function HomeScreen() {
             setConversionStage("rendering");
           }
         },
+        voiceStyle,
       );
+      audioTimingsRef.current = result.timings;
       setAudioUrl(result.audioUrl);
       setDownloadUrl(result.downloadUrl);
       setConversionStage("loading");
 
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        shouldDuckAndroid: false,
+        playThroughEarpieceAndroid: false,
+      });
       const { sound } = await Audio.Sound.createAsync(
         { uri: result.audioUrl },
-        { shouldPlay: false, isLooping: loopChapter },
+        {
+          shouldPlay: false,
+          isLooping: loopChapter,
+          volume: 1,
+          progressUpdateIntervalMillis: 100,
+        },
         handleAudioStatus,
       );
       audioRef.current = sound;
       await sound.setRateAsync(currentSpeed, true);
-      await sound.playAsync();
       setStoryStatus(
-        `Audio ready: ${result.chapters} chapter${result.chapters === 1 ? "" : "s"}. Playing the generated WAV.`,
+        `Audiobook ready: ${result.chapters} chapter${result.chapters === 1 ? "" : "s"}. Tap Play to listen.`,
+      );
+      setPlaybackMessage(
+        "Tap Play to listen through your selected audio output. Check your device volume and Bluetooth output if it is silent.",
       );
       setActiveTab("player");
     } catch (error) {
@@ -521,14 +615,10 @@ export function HomeScreen() {
     const boundedIndex = Math.max(0, Math.min(index, generatedCues.length - 1));
     setActiveCueIndex(boundedIndex);
     setActiveWordIndex(-1);
-    const wordsBefore = generatedCues
-      .slice(0, boundedIndex)
-      .reduce((total, cue) => total + (cue.text.match(/\S+/g)?.length ?? 0), 0);
-    if (totalWords > 0 && durationRef.current > 0) {
+    const timing = audioTimingsRef.current[boundedIndex];
+    if (timing && durationRef.current > 0) {
       try {
-        await audioRef.current?.setPositionAsync(
-          (wordsBefore / totalWords) * durationRef.current,
-        );
+        await audioRef.current?.setPositionAsync(timing.start * 1000);
       } catch (error) {
         setPlaybackMessage(
           error instanceof Error ? error.message : "Unable to seek to that sentence.",
@@ -619,18 +709,155 @@ export function HomeScreen() {
             </Text>
             <Pressable
               accessibilityRole="button"
-              accessibilityHint="Opens a file picker to select a PDF book"
+              accessibilityHint="Opens a file picker to select a PDF, Word, OpenDocument, HTML, Markdown, or plain text book"
+              disabled={isImporting || isConverting}
               onPress={chooseBook}
-              style={styles.pickButton}
+              style={[styles.pickButton, (isImporting || isConverting) && styles.buttonDisabled]}
             >
               <Text style={styles.pickButtonText}>
-                {book ? `Selected: ${book.name}` : "Choose PDF"}
+                {isImporting
+                  ? `Importing ${book?.name ?? "document"}…`
+                  : book
+                    ? `Selected: ${book.name}`
+                    : "Choose a story file"}
               </Text>
             </Pressable>
-            {book ? (
-              <Text style={styles.fileDetails}>
-                PDF text extraction is not connected yet. Paste story text below to continue.
+            {importError ? (
+              <Text accessibilityRole="alert" style={styles.fileDetails}>
+                {importError}
               </Text>
+            ) : null}
+            {storyStatus ? (
+              <Text accessibilityRole="alert" style={styles.fileDetails}>
+                {storyStatus}
+              </Text>
+            ) : null}
+            <Text style={styles.fileDetails}>Narration style</Text>
+            <View style={styles.voiceStyleRow}>
+              {(
+                [
+                  ["gentle", "Gentle · softer default"],
+                  ["expressive", "Expressive"],
+                ] as const
+              ).map(([style, label]) => (
+                <Pressable
+                  key={style}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: voiceStyle === style }}
+                  disabled={isConverting}
+                  onPress={() => setVoiceStyle(style)}
+                  style={[
+                    styles.voiceStyleButton,
+                    voiceStyle === style && styles.voiceStyleButtonActive,
+                    isConverting && styles.buttonDisabled,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.voiceStyleButtonText,
+                      voiceStyle === style && styles.voiceStyleButtonTextActive,
+                    ]}
+                  >
+                    {label}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            <View style={styles.actionRow}>
+              {!activeStoryText || activeStoryText !== pastedStory.trim() ? (
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={isImporting || isConverting || !pastedStory.trim()}
+                  onPress={() => void usePastedStory()}
+                  style={[
+                    styles.secondaryButton,
+                    (isImporting || isConverting || !pastedStory.trim()) &&
+                      styles.buttonDisabled,
+                  ]}
+                >
+                  <Text style={styles.secondaryButtonText}>Use this story</Text>
+                </Pressable>
+              ) : null}
+              <Pressable
+                accessibilityRole="button"
+                disabled={isConverting || isImporting || !activeStoryText.trim()}
+                onPress={() => void convertStoryToAudio()}
+                style={[
+                  styles.primaryButton,
+                  (isConverting || isImporting || !activeStoryText.trim()) &&
+                    styles.buttonDisabled,
+                ]}
+              >
+                <Text style={styles.primaryButtonText}>
+                  {isConverting ? "Converting…" : "Convert to audiobook"}
+                </Text>
+              </Pressable>
+            </View>
+            {isConverting ? (
+              <View
+                accessibilityRole="progressbar"
+                accessibilityLabel="Audiobook conversion progress"
+                accessibilityValue={{
+                  min: 0,
+                  max: 100,
+                  now:
+                    conversionStage === "uploading"
+                      ? uploadProgress
+                      : conversionStage === "loading"
+                        ? 100
+                        : undefined,
+                }}
+                style={styles.conversionPanel}
+              >
+                <View style={styles.conversionHeading}>
+                  <ActivityIndicator color="#8c4f3d" size="small" />
+                  <View style={styles.conversionCopy}>
+                    <Text style={styles.conversionTitle}>
+                      {conversionStage === "uploading"
+                        ? "Sending your story"
+                        : conversionStage === "loading"
+                          ? "Preparing your player"
+                          : "Creating your audiobook"}
+                    </Text>
+                    <Text style={styles.conversionDescription}>
+                      {conversionStage === "uploading"
+                        ? `${uploadProgress}% uploaded`
+                        : conversionStage === "loading"
+                          ? "Audio is ready · opening the player"
+                          : "Narration is being generated. Longer stories can take a little more time."}
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.conversionTrack}>
+                  {conversionStage === "uploading" ? (
+                    <View
+                      style={[
+                        styles.conversionFill,
+                        { width: `${uploadProgress}%` },
+                      ]}
+                    />
+                  ) : conversionStage === "loading" ? (
+                    <View style={[styles.conversionFill, { width: "100%" }]} />
+                  ) : (
+                    <Animated.View
+                      style={[
+                        styles.conversionFill,
+                        styles.conversionIndeterminate,
+                        { opacity: conversionPulse },
+                      ]}
+                    />
+                  )}
+                </View>
+              </View>
+            ) : null}
+            {conversionError ? (
+              <View accessibilityRole="alert" style={styles.errorPanel}>
+                <Text style={styles.errorTitle}>Audiobook creation failed</Text>
+                <Text style={styles.errorText}>{conversionError}</Text>
+                <Text style={styles.errorHint}>
+                  Check that the API is running, then try again.
+                </Text>
+              </View>
             ) : null}
 
             <View style={styles.pastePanel}>
@@ -653,85 +880,24 @@ export function HomeScreen() {
               <TextInput
                 accessibilityLabel="Paste story text"
                 multiline
-                onChangeText={setPastedStory}
+                onChangeText={(value) => {
+                  setPastedStory(value);
+                  if (activeStoryText) {
+                    setActiveStoryText(value);
+                    setStoryAnalysis(null);
+                    setAnalysisMessage("");
+                  }
+                }}
                 placeholder="Paste your story here..."
                 placeholderTextColor="#8c8178"
                 style={styles.storyInput}
                 textAlignVertical="top"
                 value={pastedStory}
               />
-              <View style={styles.actionRow}>
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => void usePastedStory()}
-                  style={styles.secondaryButton}
-                >
-                  <Text style={styles.secondaryButtonText}>Use this story</Text>
-                </Pressable>
-                <Pressable
-                  accessibilityRole="button"
-                  disabled={isConverting || !activeStoryText}
-                  onPress={() => void convertStoryToAudio()}
-                  style={[
-                    styles.primaryButton,
-                    (isConverting || !activeStoryText) && styles.buttonDisabled,
-                  ]}
-                >
-                  <Text style={styles.primaryButtonText}>
-                    {isConverting ? "Converting…" : "Create audiobook"}
-                  </Text>
-                </Pressable>
-              </View>
               {activeStoryText ? (
                 <Text style={styles.fileDetails}>
                   Ready: {buildStoryCues(activeStoryText, chapterCount).length} sentence lines
                 </Text>
-              ) : null}
-              {isConverting ? (
-                <View
-                  accessibilityRole="progressbar"
-                  accessibilityLabel="Audiobook conversion progress"
-                  style={styles.conversionPanel}
-                >
-                  <View style={styles.conversionHeading}>
-                    <ActivityIndicator color="#8c4f3d" size="small" />
-                    <View style={styles.conversionCopy}>
-                      <Text style={styles.conversionTitle}>
-                        {conversionStage === "uploading"
-                          ? "Sending your story"
-                          : conversionStage === "loading"
-                            ? "Preparing your player"
-                            : "Rendering narration"}
-                      </Text>
-                      <Text style={styles.conversionDescription}>
-                        {conversionStage === "uploading"
-                          ? `${uploadProgress}% uploaded`
-                          : conversionStage === "loading"
-                            ? "Audio rendered · loading the result"
-                            : "The audio service is creating your chapters"}
-                      </Text>
-                    </View>
-                  </View>
-                  {conversionStage === "uploading" ? (
-                    <View style={styles.conversionTrack}>
-                      <View
-                        style={[
-                          styles.conversionFill,
-                          { width: `${uploadProgress}%` },
-                        ]}
-                      />
-                    </View>
-                  ) : null}
-                </View>
-              ) : null}
-              {conversionError ? (
-                <View accessibilityRole="alert" style={styles.errorPanel}>
-                  <Text style={styles.errorTitle}>Audiobook creation failed</Text>
-                  <Text style={styles.errorText}>{conversionError}</Text>
-                  <Text style={styles.errorHint}>
-                    Check that the API is running, then try again.
-                  </Text>
-                </View>
               ) : null}
             </View>
           </View>
@@ -950,7 +1116,15 @@ export function HomeScreen() {
             </Pressable>
           </View>
           <View style={styles.timelineLabels}>
-            <Text style={styles.timelineText}>{currentCue?.timestamp ?? "00:00"}</Text>
+            <Text style={styles.timelineText}>
+              {formatAudioTime(
+                audioTimingsRef.current[activeCueIndex]?.start ??
+                  (currentCue?.timestamp
+                    ? Number(currentCue.timestamp.slice(0, 2)) * 60 +
+                      Number(currentCue.timestamp.slice(3, 5))
+                    : 0),
+              )}
+            </Text>
             <Text style={styles.timelineText}>
               {generatedCues.length} sentence{generatedCues.length === 1 ? "" : "s"}
             </Text>
@@ -1218,6 +1392,32 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     marginTop: 10,
   },
+  voiceStyleRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 8,
+  },
+  voiceStyleButton: {
+    backgroundColor: "#eee7df",
+    borderColor: "#ded7ce",
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  voiceStyleButtonActive: {
+    backgroundColor: "#6d4c41",
+    borderColor: "#6d4c41",
+  },
+  voiceStyleButtonText: {
+    color: "#4b3027",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  voiceStyleButtonTextActive: {
+    color: "#ffffff",
+  },
   pastePanel: {
     backgroundColor: "#f0e9df",
     borderRadius: 14,
@@ -1365,6 +1565,9 @@ const styles = StyleSheet.create({
     backgroundColor: "#9b5b43",
     borderRadius: 99,
     height: "100%",
+  },
+  conversionIndeterminate: {
+    width: "38%",
   },
   errorPanel: {
     backgroundColor: "#fff1ed",

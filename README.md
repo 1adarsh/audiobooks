@@ -54,11 +54,19 @@ uvicorn app.main:app --reload
 The API health check is at `http://localhost:8000/api/health`; interactive API
 docs are at `http://localhost:8000/docs`.
 
-To make audio in the app, paste story text, choose **Use pasted story**, then
-choose **Convert to audio**. The resulting WAV plays in the app and **Download
-WAV** saves a copy. PDF selection is not converted because PDF text extraction
-is not implemented yet. For a physical device, set `EXPO_PUBLIC_API_URL` to
-the computer's reachable LAN address (for example, `http://192.168.1.20:8000`)
+To make audio in the app, choose a PDF, Word (`.docx`), OpenDocument Text
+(`.odt`), HTML, Markdown, or UTF-8 text file to import its text, or paste story
+text and choose **Use this story**. Select **Gentle** narration for the softer
+default voice, or **Expressive** when you want a livelier delivery. Then choose
+**Convert to audiobook**; the progress indicator shows upload and rendering
+status. When conversion finishes, tap **Play** to start audio on the device's
+selected output (including connected Bluetooth devices). Sentence timings from
+the rendered audio drive the player highlights. The local eSpeak voice is
+computer-generated and less natural than a hosted neural voice; **Gentle** uses
+a slower pace and lower output level. **Download WAV** saves a copy.
+Scanned PDFs without selectable text need OCR, which is not implemented yet.
+For a physical device, set `EXPO_PUBLIC_API_URL` to the
+computer's reachable LAN address (for example, `http://192.168.1.20:8000`)
 before starting Expo.
 
 ### Local AI analysis
@@ -106,7 +114,8 @@ Building or running an iOS native app requires macOS and Xcode.
 
 ## Planned audio pipeline
 
-1. Import a PDF and extract text (with OCR as a later fallback for scanned books).
+1. Import PDF, Word, OpenDocument Text, HTML, Markdown, or plain text documents
+   and extract their text (with OCR as a later fallback for scanned books).
 2. Detect chapter boundaries or let the reader choose a target chapter count.
 3. Use local NLP to suggest named characters and narrator passages; let the
    reader correct speakers and save those corrections per book. Stable
@@ -120,11 +129,13 @@ Building or running an iOS native app requires macOS and Xcode.
 
 Pasting story text into the mobile app and choosing **Convert to audio** sends
 the text to the local API, which renders a WAV with the system eSpeak voice.
-The app can play that file and download it. Generated files are kept in the
+The app can play that file and download it. Playback must be started with **Play**
+after conversion, which also works around browser autoplay restrictions.
+Generated files are kept in the
 system temporary directory and are not a durable media library. AI analysis
 is a separate step: it suggests character speakers, emotions, and soundtrack
 moods, but it does not yet create distinct character voices or mix/play music
-tracks. PDF text extraction and long-running background jobs are also not
+tracks. OCR for scanned books and long-running background jobs are not
 implemented.
 
 ## Important product considerations

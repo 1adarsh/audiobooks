@@ -1,3 +1,6 @@
+import { Platform } from "react-native";
+import type { DocumentPickerAsset } from "expo-document-picker";
+
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:8000";
 
 async function fetchApi(input: string, init?: RequestInit): Promise<Response> {
@@ -25,6 +28,47 @@ export interface GeneratedAudio {
   audioUrl: string;
   downloadUrl: string;
   chapters: number;
+  timings: Array<{
+    text: string;
+    start: number;
+    end: number;
+    wordStarts: number[];
+  }>;
+}
+
+export type NarrationStyle = "gentle" | "expressive";
+
+export async function importStoryDocument(
+  asset: DocumentPickerAsset,
+): Promise<{ text: string }> {
+  const formData = new FormData();
+  if (Platform.OS === "web") {
+    if (!asset.file) {
+      throw new Error("The selected document could not be read by the browser.");
+    }
+    formData.append("file", asset.file, asset.name);
+  } else {
+    const file = {
+      uri: asset.uri,
+      name: asset.name,
+      type: asset.mimeType ?? "application/octet-stream",
+    };
+    formData.append("file", file as unknown as Blob);
+  }
+
+  const response = await fetchApi(`${API_BASE_URL}/api/audio/import`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!response.ok) {
+    throw new Error(await getApiError(response, "Document import failed"));
+  }
+
+  const result = (await response.json()) as { text?: string };
+  if (typeof result.text !== "string" || !result.text.trim()) {
+    throw new Error("Document import returned no story text.");
+  }
+  return { text: result.text };
 }
 
 export interface AnalyzedSegment {
@@ -49,6 +93,12 @@ interface AudioGenerationResponse {
   audio_url: string;
   download_url: string;
   chapters: number;
+  timings: Array<{
+    text: string;
+    start: number;
+    end: number;
+    word_starts: number[];
+  }>;
 }
 
 interface StoryAnalysisResponse {
@@ -79,11 +129,13 @@ export async function generateAudio(
   title: string,
   chapterCount: number,
   onUploadProgress?: (progress: number) => void,
+  voiceStyle: NarrationStyle = "gentle",
 ): Promise<GeneratedAudio> {
   const payload = JSON.stringify({
     text,
     title,
     chapter_count: chapterCount,
+    voice_style: voiceStyle,
   });
 
   const result = await new Promise<AudioGenerationResponse>((resolve, reject) => {
@@ -141,6 +193,12 @@ export async function generateAudio(
     audioUrl: new URL(result.audio_url, API_BASE_URL).toString(),
     downloadUrl: new URL(result.download_url, API_BASE_URL).toString(),
     chapters: result.chapters,
+    timings: result.timings.map((timing) => ({
+      text: timing.text,
+      start: timing.start,
+      end: timing.end,
+      wordStarts: timing.word_starts,
+    })),
   };
 }
 
