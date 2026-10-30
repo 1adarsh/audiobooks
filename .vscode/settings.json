@@ -1,0 +1,9 @@
+{
+  "terminal.integrated.env.linux": {
+    "ANDROID_HOME": "${env:HOME}/Android/Sdk",
+    "ANDROID_SDK_ROOT": "${env:HOME}/Android/Sdk",
+    "JAVA_HOME": "${env:HOME}/.local/share/storybook-audio/jdk-17",
+    "PATH": "${env:HOME}/.local/share/storybook-audio/jdk-17/bin:${env:HOME}/.local/share/storybook-audio/node/bin:${env:HOME}/Android/Sdk/platform-tools:${env:HOME}/Android/Sdk/emulator:${env:HOME}/Android/Sdk/cmdline-tools/latest/bin:${env:PATH}"
+  },
+  "python.defaultInterpreterPath": "${workspaceFolder}/apps/api/.venv/bin/python"
+}

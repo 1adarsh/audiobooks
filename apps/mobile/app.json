@@ -1,0 +1,19 @@
+{
+  "expo": {
+    "name": "Storybook Audio",
+    "slug": "storybook-audio",
+    "scheme": "storybook-audio",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "plugins": [
+      "expo-router"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}

@@ -1,0 +1,139 @@
+# Storybook Audio
+
+A multiplatform starting point for turning story-book PDFs into chapter-based,
+performed audiobooks. The mobile app uses Expo/React Native (Android, iOS, and
+web); the API is a separate FastAPI service.
+
+## Project layout
+
+```text
+apps/
+  mobile/                 Expo app and user-facing flows
+    app/                  Expo Router routes
+    src/
+      features/           Library, book import, generation, and player features
+      services/           API and platform integrations
+      theme/              Shared app styling
+      components/         Reusable UI
+  api/                    FastAPI service
+    app/
+      api/routes/         HTTP endpoints
+      core/               Configuration and infrastructure
+      models/             Persistence models (to be added)
+      services/           PDF, chapter, script, voice, and audio pipelines
+      workers/            Long-running generation jobs (to be added)
+packages/
+  shared/                 TypeScript contracts shared with the mobile app
+```
+
+## Getting started
+
+Requirements: Node.js and npm; Python 3.11+ and eSpeak for local narration.
+
+On Debian/Ubuntu, install the speech engine with:
+
+```sh
+sudo apt install espeak
+```
+
+```sh
+npm install
+npm run mobile
+```
+
+In another terminal:
+
+```sh
+cd apps/api
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+uvicorn app.main:app --reload
+```
+
+The API health check is at `http://localhost:8000/api/health`; interactive API
+docs are at `http://localhost:8000/docs`.
+
+To make audio in the app, paste story text, choose **Use pasted story**, then
+choose **Convert to audio**. The resulting WAV plays in the app and **Download
+WAV** saves a copy. PDF selection is not converted because PDF text extraction
+is not implemented yet. For a physical device, set `EXPO_PUBLIC_API_URL` to
+the computer's reachable LAN address (for example, `http://192.168.1.20:8000`)
+before starting Expo.
+
+### Local AI analysis
+
+In the API virtual environment, install the optional CPU inference dependencies
+and download the models once:
+
+```sh
+pip install -e ".[ai]"
+python -m app.services.download_models
+```
+
+This downloads spaCy's `en_core_web_sm` named-entity model and the MIT-licensed,
+quantized ONNX [GoEmotions student model](https://huggingface.co/Cohee/distilbert-base-uncased-go-emotions-onnx)
+(about 68 MB). No GPU or PyTorch is required. Models are cached outside the
+repository under `~/.cache/storybook-audio/models` by default; set
+`STORYBOOK_MODEL_DIR` to use another location. Use **Analyze characters & mood**
+in the app to detect named characters, narrator passages, sentence emotions,
+and a suggested soundtrack style. The compact emotion model is intended for
+suggestions, not authoritative interpretation; review its output. Text analysis
+runs in the local API.
+
+Corrections are stored in a local SQLite database at
+`~/.local/share/storybook-audio/feedback.sqlite3` and reused for the same book
+title. Set `STORYBOOK_DATA_DIR` to change the storage directory. This is
+preference memory, not automatic model training or fine-tuning. Remove
+`feedback.sqlite3` from that directory to clear saved corrections.
+
+An optional OpenAI-compatible chat-completions endpoint can refine the
+soundtrack cue. Configure all three environment variables on the API process:
+`STORYBOOK_AI_BASE_URL`, `STORYBOOK_AI_API_KEY`, and `STORYBOOK_AI_MODEL`.
+The base URL should be the API root (for example, `https://host.example/v1`),
+not the `/chat/completions` path. When enabled, only the locally selected
+mood/style/intensity are sent; story text is not sent. Leave them unset to keep
+soundtrack selection local.
+
+## Android development
+
+The Android SDK, emulator, and AVD profiles are expected under
+`~/Android/Sdk`. Reopen the VS Code terminal after opening this workspace so
+the Android, Java 17, and Node.js paths from `.vscode/settings.json` are loaded.
+Check connected devices with `adb devices` and available emulators with
+`emulator -list-avds`. Android Studio is optional for the Expo workflow.
+Building or running an iOS native app requires macOS and Xcode.
+
+## Planned audio pipeline
+
+1. Import a PDF and extract text (with OCR as a later fallback for scanned books).
+2. Detect chapter boundaries or let the reader choose a target chapter count.
+3. Use local NLP to suggest named characters and narrator passages; let the
+   reader correct speakers and save those corrections per book. Stable
+   per-character voice profiles are still future work.
+4. Classify sentence emotions and suggest soundtrack moods, with reader
+   corrections saved per book. Script generation and track selection remain
+   future work.
+5. Render narration with stable per-book character voice assignments, then mix
+   optional effects and music into chapter audio.
+6. Review, regenerate, and play chapters.
+
+Pasting story text into the mobile app and choosing **Convert to audio** sends
+the text to the local API, which renders a WAV with the system eSpeak voice.
+The app can play that file and download it. Generated files are kept in the
+system temporary directory and are not a durable media library. AI analysis
+is a separate step: it suggests character speakers, emotions, and soundtrack
+moods, but it does not yet create distinct character voices or mix/play music
+tracks. PDF text extraction and long-running background jobs are also not
+implemented.
+
+## Important product considerations
+
+- Keep character voice assignments scoped to a book so the same character stays
+  recognizable across its chapters.
+- Make chapter count, pronunciation, performance cues, and soundscape
+  intensity adjustable by the reader.
+- Keep generated music and effects optional, mixed below dialogue, and easy to
+  disable.
+- Only process books the user has permission to use, and make generated audio
+  retention and deletion clear.

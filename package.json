@@ -1,0 +1,13 @@
+{
+  "name": "storybook-audio",
+  "private": true,
+  "workspaces": [
+    "apps/mobile",
+    "packages/shared"
+  ],
+  "scripts": {
+    "mobile": "npm run start --workspace @storybook-audio/mobile",
+    "mobile:web": "npm run web --workspace @storybook-audio/mobile",
+    "typecheck": "npm run typecheck --workspace @storybook-audio/shared && npm run typecheck --workspace @storybook-audio/mobile"
+  }
+}

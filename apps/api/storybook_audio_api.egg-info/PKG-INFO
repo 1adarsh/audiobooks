@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: storybook-audio-api
+Version: 0.1.0
+Summary: API for chapter-based storybook audio generation
+Requires-Python: >=3.11
+Requires-Dist: fastapi<1.0,>=0.115
+Requires-Dist: uvicorn[standard]<1.0,>=0.30
+Provides-Extra: ai
+Requires-Dist: huggingface-hub<2.0,>=0.27; extra == "ai"
+Requires-Dist: numpy>=1.26; extra == "ai"
+Requires-Dist: onnxruntime<2.0,>=1.20; extra == "ai"
+Requires-Dist: spacy<4.0,>=3.8; extra == "ai"
+Requires-Dist: tokenizers<1.0,>=0.21; extra == "ai"
