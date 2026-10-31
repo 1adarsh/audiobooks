@@ -81,7 +81,7 @@ computer or hosted server the phone can reach.
 
 [Download the latest Android APK](https://github.com/1adarsh/audiobooks/releases/latest/download/storybook-audio.apk)
 
-To publish a new download, push a version tag such as `v0.1.0`; GitHub Actions
+To publish a new download, push a version tag such as `v0.1.1`; GitHub Actions
 builds the debug APK and attaches it to that GitHub release. The downloadable
 APK is debug-signed, so use the local release-build instructions below for a
 production-signed APK.

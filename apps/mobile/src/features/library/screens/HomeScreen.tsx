@@ -8,6 +8,7 @@ import {
   Text,
   TextInput,
   View,
+  type ScrollViewInstance,
 } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
 import { Audio, type AVPlaybackStatus } from "expo-av";
@@ -142,7 +143,7 @@ export function HomeScreen() {
   const audioRef = useRef<Audio.Sound | null>(null);
   const audioTimingsRef = useRef<GeneratedAudio["timings"]>([]);
   const durationRef = useRef(0);
-  const lyricScrollRef = useRef<ScrollView>(null);
+  const lyricScrollRef = useRef<ScrollViewInstance>(null);
   const lyricOffsets = useRef<Record<number, number>>({});
   const progressWidth = useRef(0);
   const conversionPulse = useRef(new Animated.Value(0.35)).current;
