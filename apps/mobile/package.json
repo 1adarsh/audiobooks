@@ -6,9 +6,14 @@
   "scripts": {
     "start": "expo start",
     "web": "expo start --web",
-    "typecheck": "tsc --noEmit"
+    "build:android:debug-apk": "expo prebuild --platform android && cd android && ./gradlew assembleDebug",
+    "build:android:apk": "expo prebuild --platform android && cd android && ./gradlew assembleRelease",
+    "typecheck": "tsc --noEmit",
+    "android": "expo run:android",
+    "ios": "expo run:ios"
   },
   "dependencies": {
+    "@react-native-async-storage/async-storage": "2.1.2",
     "@storybook-audio/shared": "0.1.0",
     "expo": "~53.0.0",
     "expo-av": "~15.1.7",

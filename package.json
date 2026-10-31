@@ -8,6 +8,8 @@
   "scripts": {
     "mobile": "npm run start --workspace @storybook-audio/mobile",
     "mobile:web": "npm run web --workspace @storybook-audio/mobile",
+    "android:debug-apk": "npm run build:android:debug-apk --workspace @storybook-audio/mobile",
+    "android:apk": "npm run build:android:apk --workspace @storybook-audio/mobile",
     "typecheck": "npm run typecheck --workspace @storybook-audio/shared && npm run typecheck --workspace @storybook-audio/mobile"
   }
 }

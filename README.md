@@ -65,9 +65,56 @@ the rendered audio drive the player highlights. The local eSpeak voice is
 computer-generated and less natural than a hosted neural voice; **Gentle** uses
 a slower pace and lower output level. **Download WAV** saves a copy.
 Scanned PDFs without selectable text need OCR, which is not implemented yet.
-For a physical device, set `EXPO_PUBLIC_API_URL` to the
-computer's reachable LAN address (for example, `http://192.168.1.20:8000`)
-before starting Expo.
+For a physical device, set the API server address in the app to the computer's
+reachable Wi-Fi address (for example, `http://192.168.1.20:8000`). Do not use
+`localhost` on a phone: that points to the phone itself. Keep the API running
+on the computer with `--host 0.0.0.0`, and connect both devices to the same
+Wi-Fi network. The app saves the address on the device. Plain HTTP is permitted
+only in Android debug builds; release builds require an HTTPS API endpoint.
+
+## Install on Android
+
+The APK is the mobile client; the FastAPI backend still needs to run on a
+computer or hosted server the phone can reach. Install the Android SDK and Java 17. To build a debug APK for local development
+and HTTP API testing, run:
+
+```sh
+JAVA_HOME="$HOME/.local/share/storybook-audio/jdk-17" \
+ANDROID_HOME="$HOME/Android/Sdk" \
+npm run android:debug-apk
+```
+
+This creates `apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`.
+For a release APK, first create a private signing key and keep a secure backup:
+
+```sh
+keytool -genkeypair -v \
+  -keystore "$HOME/.storybook-audio-upload-key.jks" \
+  -alias storybook-audio -keyalg RSA -keysize 2048 -validity 10000
+```
+
+Never commit or share the keystore or its passwords. Build with the same key
+for every release:
+
+```sh
+export ANDROID_KEYSTORE_FILE="$HOME/.storybook-audio-upload-key.jks"
+export ANDROID_KEY_ALIAS="storybook-audio"
+read -r -s -p "Keystore password: " ANDROID_KEYSTORE_PASSWORD; printf '\n'
+export ANDROID_KEYSTORE_PASSWORD
+read -r -s -p "Key password: " ANDROID_KEY_PASSWORD; printf '\n'
+export ANDROID_KEY_PASSWORD
+JAVA_HOME="$HOME/.local/share/storybook-audio/jdk-17" \
+ANDROID_HOME="$HOME/Android/Sdk" npm run android:apk
+```
+
+The release APK is written to
+`apps/mobile/android/app/build/outputs/apk/release/app-release.apk`. Configure
+the app to use an HTTPS API server before installing a release APK; Android
+blocks cleartext API traffic in release builds. Transfer the APK to the phone
+and open it to install. For each future APK update, increase `version` and
+`android.versionCode` in `apps/mobile/app.json`, then rebuild using the same
+signing key. Android can then install it as an in-place update. Back up the key:
+an APK signed with a different key cannot update the installed app.
 
 ### Local AI analysis
 

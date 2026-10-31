@@ -6,8 +6,13 @@
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
+    "android": {
+      "package": "com.storybookaudio.app",
+      "versionCode": 1
+    },
     "plugins": [
-      "expo-router"
+      "expo-router",
+      "./plugins/withAndroidSecurity"
     ],
     "experiments": {
       "typedRoutes": true

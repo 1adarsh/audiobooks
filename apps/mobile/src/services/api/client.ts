@@ -1,7 +1,72 @@
 import { Platform } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { DocumentPickerAsset } from "expo-document-picker";
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:8000";
+const API_BASE_URL_STORAGE_KEY = "storybook-audio-api-base-url";
+const DEFAULT_API_BASE_URL =
+  process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:8000";
+let apiBaseUrl = DEFAULT_API_BASE_URL;
+let apiSettingsPromise: Promise<void> | null = null;
+
+function normalizeApiBaseUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    throw new Error("Enter a valid API address, such as http://192.168.1.20:8000.");
+  }
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    !url.hostname ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error("The API address must be an HTTP or HTTPS URL without credentials.");
+  }
+  return value.trim().replace(/\/+$/, "");
+}
+
+async function loadApiSettings(): Promise<void> {
+  if (!apiSettingsPromise) {
+    apiSettingsPromise = AsyncStorage.getItem(API_BASE_URL_STORAGE_KEY)
+      .then((savedApiBaseUrl) => {
+        if (savedApiBaseUrl) {
+          apiBaseUrl = normalizeApiBaseUrl(savedApiBaseUrl);
+        }
+      })
+      .catch((error: unknown) => {
+        apiSettingsPromise = null;
+        throw new Error(
+          `Unable to load the saved API address: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      });
+  }
+  await apiSettingsPromise;
+}
+
+export async function getApiBaseUrl(): Promise<string> {
+  await loadApiSettings();
+  return apiBaseUrl;
+}
+
+export async function setApiBaseUrl(value: string): Promise<void> {
+  await loadApiSettings();
+  const normalizedApiBaseUrl = normalizeApiBaseUrl(value);
+  try {
+    await AsyncStorage.setItem(API_BASE_URL_STORAGE_KEY, normalizedApiBaseUrl);
+  } catch (error) {
+    throw new Error(
+      `Unable to save the API address: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  apiBaseUrl = normalizedApiBaseUrl;
+}
 
 async function fetchApi(input: string, init?: RequestInit): Promise<Response> {
   try {
@@ -17,7 +82,8 @@ async function fetchApi(input: string, init?: RequestInit): Promise<Response> {
 }
 
 export async function getApiHealth(): Promise<{ status: string }> {
-  const response = await fetchApi(`${API_BASE_URL}/api/health`);
+  const baseUrl = await getApiBaseUrl();
+  const response = await fetchApi(`${baseUrl}/api/health`);
   if (!response.ok) {
     throw new Error(`API health check failed: ${response.status}`);
   }
@@ -41,6 +107,7 @@ export type NarrationStyle = "gentle" | "expressive";
 export async function importStoryDocument(
   asset: DocumentPickerAsset,
 ): Promise<{ text: string }> {
+  const baseUrl = await getApiBaseUrl();
   const formData = new FormData();
   if (Platform.OS === "web") {
     if (!asset.file) {
@@ -56,7 +123,7 @@ export async function importStoryDocument(
     formData.append("file", file as unknown as Blob);
   }
 
-  const response = await fetchApi(`${API_BASE_URL}/api/audio/import`, {
+  const response = await fetchApi(`${baseUrl}/api/audio/import`, {
     method: "POST",
     body: formData,
   });
@@ -131,6 +198,7 @@ export async function generateAudio(
   onUploadProgress?: (progress: number) => void,
   voiceStyle: NarrationStyle = "gentle",
 ): Promise<GeneratedAudio> {
+  const baseUrl = await getApiBaseUrl();
   const payload = JSON.stringify({
     text,
     title,
@@ -140,7 +208,7 @@ export async function generateAudio(
 
   const result = await new Promise<AudioGenerationResponse>((resolve, reject) => {
     const request = new XMLHttpRequest();
-    request.open("POST", `${API_BASE_URL}/api/audio/generate`);
+    request.open("POST", `${baseUrl}/api/audio/generate`);
     request.setRequestHeader("Content-Type", "application/json");
     request.upload.addEventListener("progress", (event) => {
       if (event.lengthComputable) {
@@ -190,8 +258,8 @@ export async function generateAudio(
   });
 
   return {
-    audioUrl: new URL(result.audio_url, API_BASE_URL).toString(),
-    downloadUrl: new URL(result.download_url, API_BASE_URL).toString(),
+    audioUrl: new URL(result.audio_url, baseUrl).toString(),
+    downloadUrl: new URL(result.download_url, baseUrl).toString(),
     chapters: result.chapters,
     timings: result.timings.map((timing) => ({
       text: timing.text,
@@ -206,7 +274,8 @@ export async function analyzeStory(
   text: string,
   bookId: string,
 ): Promise<StoryAnalysis> {
-  const response = await fetchApi(`${API_BASE_URL}/api/audio/analyze`, {
+  const baseUrl = await getApiBaseUrl();
+  const response = await fetchApi(`${baseUrl}/api/audio/analyze`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text, book_id: bookId }),
@@ -239,7 +308,8 @@ export async function saveAnalysisFeedback(
   targetText: string,
   correctedValue: string,
 ): Promise<void> {
-  const response = await fetchApi(`${API_BASE_URL}/api/audio/feedback`, {
+  const baseUrl = await getApiBaseUrl();
+  const response = await fetchApi(`${baseUrl}/api/audio/feedback`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

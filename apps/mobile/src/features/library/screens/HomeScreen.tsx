@@ -15,10 +15,13 @@ import * as Linking from "expo-linking";
 import type { PickedBook, PlaybackCue } from "../types";
 import {
   analyzeStory,
+  getApiBaseUrl,
+  getApiHealth,
   generateAudio,
   importStoryDocument,
   type NarrationStyle,
   saveAnalysisFeedback,
+  setApiBaseUrl,
   type GeneratedAudio,
   type StoryAnalysis,
 } from "../../../services/api/client";
@@ -103,6 +106,11 @@ function buildStoryCues(storyText: string, chapterCountValue: string): PlaybackC
 
 export function HomeScreen() {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("story");
+  const [apiUrl, setApiUrl] = useState("");
+  const [apiUrlDraft, setApiUrlDraft] = useState("");
+  const [apiStatus, setApiStatus] = useState("Checking API connection…");
+  const [apiSettingsOpen, setApiSettingsOpen] = useState(false);
+  const [isSavingApiUrl, setIsSavingApiUrl] = useState(false);
   const [chapterCount, setChapterCount] = useState("1");
   const [voiceStyle, setVoiceStyle] = useState<NarrationStyle>("gentle");
   const [book, setBook] = useState<PickedBook | null>(null);
@@ -138,6 +146,34 @@ export function HomeScreen() {
   const lyricOffsets = useRef<Record<number, number>>({});
   const progressWidth = useRef(0);
   const conversionPulse = useRef(new Animated.Value(0.35)).current;
+
+  useEffect(() => {
+    let isMounted = true;
+    async function checkApiConnection() {
+      try {
+        const savedApiUrl = await getApiBaseUrl();
+        if (isMounted) {
+          setApiUrl(savedApiUrl);
+          setApiUrlDraft(savedApiUrl);
+        }
+        await getApiHealth();
+        if (isMounted) {
+          setApiStatus("Connected");
+        }
+      } catch (error) {
+        if (isMounted) {
+          setApiStatus(
+            error instanceof Error ? error.message : "Unable to check the API connection.",
+          );
+        }
+      }
+    }
+
+    void checkApiConnection();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const currentSpeed = playbackSpeeds[speedIndex];
   const bookTitle = useMemo(() => {
@@ -310,6 +346,25 @@ export function HomeScreen() {
     setAudioProgress(0);
     setIsPlaying(false);
     setActiveWordIndex(-1);
+  }
+
+  async function saveApiAddress() {
+    setIsSavingApiUrl(true);
+    setApiStatus("Saving API address…");
+    try {
+      await setApiBaseUrl(apiUrlDraft);
+      const savedApiUrl = await getApiBaseUrl();
+      setApiUrl(savedApiUrl);
+      setApiUrlDraft(savedApiUrl);
+      await getApiHealth();
+      setApiStatus("Connected");
+    } catch (error) {
+      setApiStatus(
+        error instanceof Error ? error.message : "Unable to save or reach the API.",
+      );
+    } finally {
+      setIsSavingApiUrl(false);
+    }
   }
 
   async function chooseBook() {
@@ -666,6 +721,67 @@ export function HomeScreen() {
         <Text style={styles.description}>
           Build the story, shape its performance, then listen—all from one place.
         </Text>
+
+        <View style={styles.apiSettingsCard}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ expanded: apiSettingsOpen }}
+            onPress={() => setApiSettingsOpen((open) => !open)}
+            style={styles.apiSettingsHeader}
+          >
+            <View style={styles.apiSettingsHeading}>
+              <Text style={styles.apiSettingsTitle}>API server</Text>
+              <Text style={styles.apiSettingsUrl} numberOfLines={1}>
+                {apiUrl || "Loading address…"}
+              </Text>
+            </View>
+            <Text style={styles.apiSettingsAction}>
+              {apiSettingsOpen ? "Close" : "Change"}
+            </Text>
+          </Pressable>
+          <Text
+            accessibilityRole="alert"
+            style={[
+              styles.apiStatus,
+              apiStatus === "Connected" && styles.apiStatusConnected,
+            ]}
+          >
+            {apiStatus}
+          </Text>
+          {apiSettingsOpen ? (
+            <View>
+              <Text style={styles.apiSettingsHint}>
+                On a phone, enter your computer’s Wi-Fi address and port 8000 (for example,
+                http://192.168.1.20:8000). Keep the API server running on that computer.
+              </Text>
+              <TextInput
+                accessibilityLabel="API server address"
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="url"
+                onChangeText={setApiUrlDraft}
+                onSubmitEditing={() => void saveApiAddress()}
+                placeholder="http://192.168.1.20:8000"
+                returnKeyType="done"
+                style={styles.apiSettingsInput}
+                value={apiUrlDraft}
+              />
+              <Pressable
+                accessibilityRole="button"
+                disabled={isSavingApiUrl || !apiUrlDraft.trim()}
+                onPress={() => void saveApiAddress()}
+                style={[
+                  styles.apiSettingsButton,
+                  (isSavingApiUrl || !apiUrlDraft.trim()) && styles.buttonDisabled,
+                ]}
+              >
+                <Text style={styles.apiSettingsButtonText}>
+                  {isSavingApiUrl ? "Saving and testing…" : "Save and test connection"}
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
+        </View>
 
         <View style={styles.workspaceTabs} accessibilityRole="tablist">
           {workspaceTabs.map((tab) => (
@@ -1315,8 +1431,76 @@ const styles = StyleSheet.create({
     color: "#655e56",
     fontSize: 16,
     lineHeight: 24,
-    marginBottom: 18,
+    marginBottom: 14,
     marginTop: 12,
+  },
+  apiSettingsCard: {
+    backgroundColor: "#f0e9df",
+    borderRadius: 12,
+    marginBottom: 16,
+    padding: 14,
+  },
+  apiSettingsHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  apiSettingsHeading: {
+    flex: 1,
+    marginRight: 12,
+  },
+  apiSettingsTitle: {
+    color: "#3d342d",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  apiSettingsUrl: {
+    color: "#655e56",
+    fontSize: 12,
+    marginTop: 3,
+  },
+  apiSettingsAction: {
+    color: "#6d4c41",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  apiStatus: {
+    color: "#8a4538",
+    fontSize: 12,
+    marginTop: 8,
+  },
+  apiStatusConnected: {
+    color: "#426743",
+  },
+  apiSettingsHint: {
+    color: "#655e56",
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 10,
+  },
+  apiSettingsInput: {
+    backgroundColor: "#ffffff",
+    borderColor: "#ded7ce",
+    borderRadius: 8,
+    borderWidth: 1,
+    color: "#28231f",
+    fontSize: 14,
+    marginTop: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  apiSettingsButton: {
+    alignSelf: "flex-start",
+    backgroundColor: "#6d4c41",
+    borderRadius: 8,
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  apiSettingsButtonText: {
+    color: "#ffffff",
+    fontSize: 13,
+    fontWeight: "700",
   },
   workspaceTabs: {
     backgroundColor: "#eee7df",

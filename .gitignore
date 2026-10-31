@@ -1,5 +1,6 @@
 node_modules/
 .expo/
+apps/mobile/android/
 dist/
 coverage/
 .env
