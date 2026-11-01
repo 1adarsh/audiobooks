@@ -104,6 +104,15 @@ export interface GeneratedAudio {
 
 export type NarrationStyle = "gentle" | "expressive";
 
+export const voiceProfileOptions = [
+  { id: "gentle_female", label: "Gentle female" },
+  { id: "bright_female", label: "Bright female" },
+  { id: "warm_male", label: "Warm male" },
+  { id: "deep_male", label: "Deep male" },
+] as const;
+
+export type VoiceProfileId = (typeof voiceProfileOptions)[number]["id"];
+
 export async function importStoryDocument(
   asset: DocumentPickerAsset,
 ): Promise<{ text: string }> {
@@ -156,6 +165,19 @@ export interface StoryAnalysis {
   truncated: boolean;
 }
 
+export interface NarrationScript {
+  lines: Array<{
+    number: number;
+    speaker: string;
+    delivery: string;
+    text: string;
+    isDialogue: boolean;
+    voiceProfile: VoiceProfileId;
+  }>;
+  totalLines: number;
+  truncated: boolean;
+}
+
 interface AudioGenerationResponse {
   audio_url: string;
   download_url: string;
@@ -184,6 +206,19 @@ interface StoryAnalysisResponse {
   truncated: boolean;
 }
 
+interface NarrationScriptResponse {
+  lines: Array<{
+    number: number;
+    speaker: string;
+    delivery: string;
+    text: string;
+    is_dialogue: boolean;
+    voice_profile: VoiceProfileId;
+  }>;
+  total_lines: number;
+  truncated: boolean;
+}
+
 type ApiErrorResponse = { detail?: string };
 
 async function getApiError(response: Response, fallback: string): Promise<string> {
@@ -197,6 +232,7 @@ export async function generateAudio(
   chapterCount: number,
   onUploadProgress?: (progress: number) => void,
   voiceStyle: NarrationStyle = "gentle",
+  scriptLines?: NarrationScript["lines"],
 ): Promise<GeneratedAudio> {
   const baseUrl = await getApiBaseUrl();
   const payload = JSON.stringify({
@@ -204,6 +240,14 @@ export async function generateAudio(
     title,
     chapter_count: chapterCount,
     voice_style: voiceStyle,
+    script_lines: scriptLines?.map((line) => ({
+      number: line.number,
+      speaker: line.speaker,
+      delivery: line.delivery,
+      text: line.text,
+      is_dialogue: line.isDialogue,
+      voice_profile: line.voiceProfile,
+    })),
   });
 
   const result = await new Promise<AudioGenerationResponse>((resolve, reject) => {
@@ -302,9 +346,38 @@ export async function analyzeStory(
   };
 }
 
+export async function generateNarrationScript(
+  text: string,
+  bookId: string,
+): Promise<NarrationScript> {
+  const baseUrl = await getApiBaseUrl();
+  const response = await fetchApi(`${baseUrl}/api/audio/script`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, book_id: bookId }),
+  });
+  if (!response.ok) {
+    throw new Error(await getApiError(response, "Script generation failed"));
+  }
+
+  const result = (await response.json()) as NarrationScriptResponse;
+  return {
+    lines: result.lines.map((line) => ({
+      number: line.number,
+      speaker: line.speaker,
+      delivery: line.delivery,
+      text: line.text,
+      isDialogue: line.is_dialogue,
+      voiceProfile: line.voice_profile,
+    })),
+    totalLines: result.total_lines,
+    truncated: result.truncated,
+  };
+}
+
 export async function saveAnalysisFeedback(
   bookId: string,
-  category: "speaker" | "emotion" | "music_mood",
+  category: "speaker" | "emotion" | "music_mood" | "voice_profile",
   targetText: string,
   correctedValue: string,
 ): Promise<void> {

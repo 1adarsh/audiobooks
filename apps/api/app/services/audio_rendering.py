@@ -11,6 +11,8 @@ import wave
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.services.script_generation import VOICE_PROFILES
+
 MAX_TEXT_LENGTH = 120_000
 MAX_CHAPTERS = 12
 OUTPUT_DIRECTORY = Path(tempfile.gettempdir()) / "storybook-audio"
@@ -70,7 +72,7 @@ def _active_audio_frame_range(pcm: bytes, channels: int) -> tuple[int, int]:
     return first_active, last_active + 1
 
 
-def _split_sentences(text: str) -> list[str]:
+def split_sentences(text: str) -> list[str]:
     return [
         sentence.strip()
         for sentence in SENTENCE_PATTERN.findall(text)
@@ -79,7 +81,7 @@ def _split_sentences(text: str) -> list[str]:
 
 
 def _make_chapters(text: str, chapter_count: int) -> list[str]:
-    sentences = _split_sentences(text)
+    sentences = split_sentences(text)
     if not sentences:
         raise ValueError("Story text must contain at least one sentence.")
 
@@ -96,6 +98,7 @@ def render_audio(
     text: str,
     chapter_count: int,
     voice_style: str = "gentle",
+    sentence_voice_profiles: list[str] | None = None,
 ) -> tuple[str, int, list[SentenceTiming]]:
     """Render an audiobook and return its ID, chapter count, and sentence timings."""
     normalized_text = text.strip()
@@ -120,7 +123,12 @@ def render_audio(
         if voice_style == "gentle"
         else ["-v", "en-us", "-s", "165", "-p", "50", "-a", "100"]
     )
-    sentences = _split_sentences(normalized_text)
+    sentences = split_sentences(normalized_text)
+    if sentence_voice_profiles is not None:
+        if len(sentence_voice_profiles) > len(sentences):
+            raise ValueError("Story has more voice profiles than sentences.")
+        if any(profile not in VOICE_PROFILES for profile in sentence_voice_profiles):
+            raise ValueError("Story contains an unsupported voice profile.")
     chapter_count_actual = len(chapters)
     chapter_ranges = [
         (
@@ -139,8 +147,21 @@ def render_audio(
         sample_params: wave._wave_params | None = None
         written_frames = 0
         for sentence_index, sentence in enumerate(sentences):
+            sentence_voice_options = voice_options
+            if sentence_voice_profiles is not None and sentence_index < len(sentence_voice_profiles):
+                profile = VOICE_PROFILES[sentence_voice_profiles[sentence_index]]
+                sentence_voice_options = [
+                    "-v",
+                    profile["voice"],
+                    "-s",
+                    "135" if voice_style == "gentle" else "165",
+                    "-p",
+                    str(profile["pitch"]),
+                    "-a",
+                    "100",
+                ]
             result = subprocess.run(
-                [executable, "--stdout", "--stdin", *voice_options],
+                [executable, "--stdout", "--stdin", *sentence_voice_options],
                 input=sentence.encode("utf-8"),
                 check=True,
                 capture_output=True,

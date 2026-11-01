@@ -7,7 +7,7 @@ import wave
 from pathlib import Path
 from unittest.mock import patch
 
-from app.services.audio_rendering import _split_sentences, render_audio
+from app.services.audio_rendering import render_audio, split_sentences
 
 
 def make_wav() -> bytes:
@@ -24,7 +24,7 @@ def make_wav() -> bytes:
 class AudioRenderingTests(unittest.TestCase):
     def test_sentence_splitting_keeps_quoted_sentence_boundaries(self) -> None:
         self.assertEqual(
-            _split_sentences('She said, "Wait!" Then she left.\nThe end.'),
+            split_sentences('She said, "Wait!" Then she left.\nThe end.'),
             ['She said, "Wait!"', "Then she left.", "The end."],
         )
 
@@ -63,6 +63,29 @@ class AudioRenderingTests(unittest.TestCase):
         args = run.call_args.args[0]
         self.assertEqual(args[args.index("-v") + 1], "en-us")
         self.assertEqual(args[args.index("-s") + 1], "165")
+
+    def test_script_voice_profiles_are_applied_per_sentence(self) -> None:
+        result = subprocess.CompletedProcess(args=[], returncode=0, stdout=make_wav(), stderr=b"")
+        with tempfile.TemporaryDirectory() as output_directory:
+            with (
+                patch("app.services.audio_rendering.shutil.which", return_value="/usr/bin/espeak"),
+                patch("app.services.audio_rendering.subprocess.run", return_value=result) as run,
+                patch(
+                    "app.services.audio_rendering.OUTPUT_DIRECTORY",
+                    Path(output_directory),
+                ),
+            ):
+                render_audio(
+                    "A little story. Another sentence.",
+                    1,
+                    sentence_voice_profiles=["deep_male"],
+                )
+
+        first_args = run.call_args_list[0].args[0]
+        second_args = run.call_args_list[1].args[0]
+        self.assertEqual(first_args[first_args.index("-v") + 1], "en-us+m3")
+        self.assertEqual(first_args[first_args.index("-p") + 1], "34")
+        self.assertEqual(second_args[second_args.index("-v") + 1], "en-us+f3")
 
     def test_rejects_unknown_voice_style(self) -> None:
         with self.assertRaisesRegex(ValueError, "Voice style must be"):

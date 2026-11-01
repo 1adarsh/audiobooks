@@ -178,12 +178,14 @@ Building or running an iOS native app requires macOS and Xcode.
    and extract their text (with OCR as a later fallback for scanned books).
 2. Detect chapter boundaries or let the reader choose a target chapter count.
 3. Use local NLP to suggest named characters and narrator passages; let the
-   reader correct speakers and save those corrections per book. Stable
-   per-character voice profiles are still future work.
+   reader correct speakers and save those corrections per book. Narration
+   scripts assign stable per-book eSpeak voice profiles to each speaker, and
+   the reader can change and reuse those assignments.
 4. Classify sentence emotions and suggest soundtrack moods, with reader
-   corrections saved per book. Script generation and track selection remain
-   future work.
-5. Render narration with stable per-book character voice assignments, then mix
+   corrections saved per book. The app can generate a speaker- and
+   delivery-tagged narration script from analyzed sentences while preserving
+   the original wording. Track selection remains future work.
+5. Render narration with per-character voice assignments, then mix
    optional effects and music into chapter audio.
 6. Review, regenerate, and play chapters.
 
@@ -194,9 +196,12 @@ after conversion, which also works around browser autoplay restrictions.
 Generated files are kept in the
 system temporary directory and are not a durable media library. AI analysis
 is a separate step: it suggests character speakers, emotions, and soundtrack
-moods, but it does not yet create distinct character voices or mix/play music
-tracks. OCR for scanned books and long-running background jobs are not
-implemented.
+moods. Generated scripts can apply distinct eSpeak voice profiles consistently
+per speaker and book. Change a speaker's profile in the Characters tab, then
+convert the story again to apply it. For scripts over 250 sentences, profiles
+apply to the analyzed lines and the selected narration style is used for the
+remaining audio. Music tracks are not mixed into playback yet. OCR for scanned
+books and long-running background jobs are not implemented.
 
 ## Important product considerations
 

@@ -16,6 +16,7 @@ import * as Linking from "expo-linking";
 import type { PickedBook, PlaybackCue } from "../types";
 import {
   analyzeStory,
+  generateNarrationScript,
   getApiBaseUrl,
   getApiHealth,
   generateAudio,
@@ -23,7 +24,9 @@ import {
   type NarrationStyle,
   saveAnalysisFeedback,
   setApiBaseUrl,
+  voiceProfileOptions,
   type GeneratedAudio,
+  type NarrationScript,
   type StoryAnalysis,
 } from "../../../services/api/client";
 
@@ -121,6 +124,8 @@ export function HomeScreen() {
   const [activeBookTitle, setActiveBookTitle] = useState("");
   const [storyAnalysis, setStoryAnalysis] = useState<StoryAnalysis | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [narrationScript, setNarrationScript] = useState<NarrationScript | null>(null);
+  const [isGeneratingScript, setIsGeneratingScript] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState("");
   const [analysisMessage, setAnalysisMessage] = useState("");
@@ -190,11 +195,24 @@ export function HomeScreen() {
   }, [activeBookTitle, book, activeStoryText]);
 
   const generatedCues = useMemo(
-    () =>
-      activeStoryText
-        ? buildStoryCues(activeStoryText, chapterCount)
-        : buildGeneratedCues(bookTitle, chapterCount),
-    [activeStoryText, bookTitle, chapterCount],
+    () => {
+      if (!activeStoryText) {
+        return buildGeneratedCues(bookTitle, chapterCount);
+      }
+
+      const cues = buildStoryCues(activeStoryText, chapterCount);
+      if (
+        narrationScript &&
+        narrationScript.lines.length <= cues.length
+      ) {
+        return cues.map((cue, index) => ({
+          ...cue,
+          speaker: narrationScript.lines[index]?.speaker ?? cue.speaker,
+        }));
+      }
+      return cues;
+    },
+    [activeStoryText, bookTitle, chapterCount, narrationScript],
   );
 
   useEffect(() => {
@@ -405,6 +423,7 @@ export function HomeScreen() {
         setActiveStoryText(imported.text);
         setActiveBookTitle(title);
         setStoryAnalysis(null);
+        setNarrationScript(null);
         setAnalysisMessage("");
         setConversionError("");
         setPlaybackMessage("");
@@ -445,6 +464,7 @@ export function HomeScreen() {
     setActiveStoryText(trimmedStory);
     setActiveBookTitle(pastedBookTitle.trim() || "Pasted story");
     setStoryAnalysis(null);
+    setNarrationScript(null);
     setAnalysisMessage("");
     setImportError("");
     setConversionError("");
@@ -469,6 +489,7 @@ export function HomeScreen() {
         activeBookTitle || "Pasted story",
       );
       setStoryAnalysis(result);
+      setNarrationScript(null);
       setAnalysisMessage("Analysis ready. Suggestions can be corrected and saved for this book.");
     } catch (error) {
       setAnalysisMessage(
@@ -476,6 +497,74 @@ export function HomeScreen() {
       );
     } finally {
       setIsAnalyzing(false);
+    }
+  }
+
+  async function createNarrationScript() {
+    if (!activeStoryText.trim()) {
+      setAnalysisMessage("Choose Use pasted story before generating a script.");
+      return;
+    }
+
+    setIsGeneratingScript(true);
+    setAnalysisMessage("");
+    try {
+      const result = await generateNarrationScript(
+        activeStoryText,
+        activeBookTitle || "Pasted story",
+      );
+      setNarrationScript(result);
+      setAnalysisMessage("Script ready. Voice profiles are assigned for this book and can be changed below.");
+    } catch (error) {
+      setAnalysisMessage(
+        error instanceof Error ? error.message : "Script generation failed.",
+      );
+    } finally {
+      setIsGeneratingScript(false);
+    }
+  }
+
+  async function updateVoiceProfile(speaker: string) {
+    if (!narrationScript) {
+      return;
+    }
+
+    const currentProfile = narrationScript.lines.find(
+      (line) => line.speaker === speaker,
+    )?.voiceProfile;
+    if (!currentProfile) {
+      return;
+    }
+    const currentIndex = voiceProfileOptions.findIndex(
+      (profile) => profile.id === currentProfile,
+    );
+    const nextProfile = voiceProfileOptions[(currentIndex + 1) % voiceProfileOptions.length];
+
+    try {
+      await saveAnalysisFeedback(
+        activeBookTitle || "Pasted story",
+        "voice_profile",
+        speaker,
+        nextProfile.id,
+      );
+      setNarrationScript((current) =>
+        current
+          ? {
+              ...current,
+              lines: current.lines.map((line) =>
+                line.speaker === speaker
+                  ? { ...line, voiceProfile: nextProfile.id }
+                  : line,
+              ),
+            }
+          : current,
+      );
+      setAnalysisMessage(`Saved ${nextProfile.label} voice for ${speaker} in this book.`);
+      setPlaybackMessage("Voice profile saved. Convert the story again to apply it to the audio.");
+    } catch (error) {
+      setAnalysisMessage(
+        error instanceof Error ? error.message : "Unable to save the voice profile.",
+      );
     }
   }
 
@@ -515,6 +604,7 @@ export function HomeScreen() {
         );
         return { ...current, segments };
       });
+      setNarrationScript(null);
       setAnalysisMessage(`Saved ${category} correction for this book.`);
     } catch (error) {
       setAnalysisMessage(
@@ -582,6 +672,7 @@ export function HomeScreen() {
     try {
       await clearAudio();
       const requestedChapters = Number.parseInt(chapterCount || "1", 10);
+      const scriptLines = narrationScript?.lines;
       const result = await generateAudio(
         activeStoryText,
         bookTitle,
@@ -595,6 +686,7 @@ export function HomeScreen() {
           }
         },
         voiceStyle,
+        scriptLines,
       );
       audioTimingsRef.current = result.timings;
       setAudioUrl(result.audioUrl);
@@ -620,7 +712,7 @@ export function HomeScreen() {
       audioRef.current = sound;
       await sound.setRateAsync(currentSpeed, true);
       setStoryStatus(
-        `Audiobook ready: ${result.chapters} chapter${result.chapters === 1 ? "" : "s"}. Tap Play to listen.`,
+        `Audiobook ready: ${result.chapters} chapter${result.chapters === 1 ? "" : "s"}${scriptLines?.length ? ` with character profiles on the first ${scriptLines.length} sentences` : ""}. Tap Play to listen.`,
       );
       setPlaybackMessage(
         "Tap Play to listen through your selected audio output. Check your device volume and Bluetooth output if it is silent.",
@@ -986,6 +1078,7 @@ export function HomeScreen() {
                   if (activeStoryText) {
                     setActiveBookTitle(value.trim() || "Pasted story");
                     setStoryAnalysis(null);
+                    setNarrationScript(null);
                     setAnalysisMessage("");
                   }
                 }}
@@ -1002,6 +1095,7 @@ export function HomeScreen() {
                   if (activeStoryText) {
                     setActiveStoryText(value);
                     setStoryAnalysis(null);
+                    setNarrationScript(null);
                     setAnalysisMessage("");
                   }
                 }}
@@ -1023,10 +1117,11 @@ export function HomeScreen() {
         {activeTab === "cast" ? (
           <View style={styles.workspacePanel}>
             <Text accessibilityRole="header" style={styles.sectionTitle}>
-              Character & narrator casting
+              Character casting & narration script
             </Text>
             <Text style={styles.panelDescription}>
-              Review suggested speakers and emotions. Corrections are remembered for this book.
+              Review suggested speakers and emotions, then build a script with delivery cues.
+              Story wording is preserved; cues are suggestions.
             </Text>
             <Pressable
               accessibilityRole="button"
@@ -1092,6 +1187,67 @@ export function HomeScreen() {
                 {storyAnalysis.truncated ? (
                   <Text style={styles.analysisText}>
                     Showing 12 of {storyAnalysis.totalSegments} lines.
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
+            <Pressable
+              accessibilityRole="button"
+              disabled={isGeneratingScript || !activeStoryText}
+              onPress={() => void createNarrationScript()}
+              style={[
+                styles.secondaryButton,
+                (isGeneratingScript || !activeStoryText) && styles.buttonDisabled,
+              ]}
+            >
+              <Text style={styles.secondaryButtonText}>
+                {isGeneratingScript ? "Generating script…" : "Generate narration script"}
+              </Text>
+            </Pressable>
+            {narrationScript ? (
+              <View style={styles.analysisPanel}>
+                <Text style={styles.analysisTitle}>Narration script</Text>
+                <Text style={styles.analysisText}>
+                  {narrationScript.lines.length} lines generated
+                </Text>
+                  <Text style={styles.analysisText}>
+                    Voices stay consistent for this book. Change a speaker's voice below.
+                  </Text>
+                  {Array.from(new Set(narrationScript.lines.map((line) => line.speaker))).map(
+                    (speaker) => {
+                      const profile = voiceProfileOptions.find(
+                        (option) =>
+                          option.id ===
+                          narrationScript.lines.find((line) => line.speaker === speaker)
+                            ?.voiceProfile,
+                      );
+                      return (
+                        <Pressable
+                          key={speaker}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Change ${speaker} voice profile`}
+                          onPress={() => void updateVoiceProfile(speaker)}
+                          style={styles.feedbackButton}
+                        >
+                          <Text style={styles.feedbackButtonText}>
+                            {speaker} · {profile?.label ?? "Voice"} · change
+                          </Text>
+                        </Pressable>
+                      );
+                    },
+                  )}
+                  {narrationScript.lines.slice(0, 12).map((line) => (
+                  <View key={line.number} style={styles.analysisSegment}>
+                    <Text style={styles.analysisText}>
+                      {line.number}. {line.speaker} · {line.delivery}
+                    </Text>
+                    <Text style={styles.analysisSegmentText}>{line.text}</Text>
+                  </View>
+                ))}
+                {narrationScript.truncated || narrationScript.lines.length > 12 ? (
+                  <Text style={styles.analysisText}>
+                    Showing the first 12 of {narrationScript.totalLines} lines. Split long stories
+                    into sections to generate a complete script.
                   </Text>
                 ) : null}
               </View>

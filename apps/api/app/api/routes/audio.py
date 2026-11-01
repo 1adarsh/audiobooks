@@ -7,11 +7,26 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.services.analysis_feedback import get_feedback, save_feedback
-from app.services.audio_rendering import get_audio_path, render_audio
+from app.services.audio_rendering import get_audio_path, render_audio, split_sentences
 from app.services.character_casting import analyze_story
+from app.services.script_generation import VOICE_PROFILES, build_narration_script
 from app.services.story_import import MAX_DOCUMENT_SIZE, extract_story_text
 
 router = APIRouter(tags=["audio"])
+
+
+class NarrationScriptLine(BaseModel):
+    number: int
+    speaker: str
+    delivery: str
+    text: str = Field(min_length=1, max_length=120_000)
+    is_dialogue: bool
+    voice_profile: Literal[
+        "gentle_female",
+        "bright_female",
+        "warm_male",
+        "deep_male",
+    ]
 
 
 class AudioGenerationRequest(BaseModel):
@@ -19,6 +34,7 @@ class AudioGenerationRequest(BaseModel):
     title: str = Field(default="storybook-audio", min_length=1, max_length=120)
     chapter_count: int = Field(default=1, ge=1, le=12)
     voice_style: Literal["gentle", "expressive"] = "gentle"
+    script_lines: list[NarrationScriptLine] | None = Field(default=None, max_length=250)
 
 
 class AudioSentenceTiming(BaseModel):
@@ -76,9 +92,15 @@ class StoryAnalysisResponse(BaseModel):
     truncated: bool
 
 
+class NarrationScriptResponse(BaseModel):
+    lines: list[NarrationScriptLine]
+    total_lines: int
+    truncated: bool
+
+
 class AnalysisFeedbackRequest(BaseModel):
     book_id: str = Field(min_length=1, max_length=120)
-    category: Literal["speaker", "emotion", "music_mood"]
+    category: Literal["speaker", "emotion", "music_mood", "voice_profile"]
     target_text: str = Field(default="", max_length=1_000)
     corrected_value: str = Field(min_length=1, max_length=120)
 
@@ -101,9 +123,25 @@ async def import_story(file: UploadFile = File(...)) -> StoryImportResponse:
 
 @router.post("/audio/generate", response_model=AudioGenerationResponse)
 def generate_audio(request: AudioGenerationRequest) -> AudioGenerationResponse:
+    render_text = request.text
+    sentence_voice_profiles = None
+    if request.script_lines is not None:
+        script_texts = [line.text for line in request.script_lines]
+        if split_sentences(request.text)[: len(script_texts)] != script_texts:
+            raise HTTPException(
+                status_code=422,
+                detail="Script lines must match the beginning of the submitted story text.",
+            )
+        sentence_voice_profiles = [
+            line.voice_profile for line in request.script_lines
+        ]
+
     try:
         audio_id, chapter_total, timings = render_audio(
-            request.text, request.chapter_count, request.voice_style
+            render_text,
+            request.chapter_count,
+            request.voice_style,
+            sentence_voice_profiles,
         )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
@@ -149,6 +187,35 @@ def analyze_audio_story(request: StoryAnalysisRequest) -> StoryAnalysisResponse:
     return StoryAnalysisResponse(**analysis)
 
 
+@router.post("/audio/script", response_model=NarrationScriptResponse)
+def generate_narration_script(
+    request: StoryAnalysisRequest,
+) -> NarrationScriptResponse:
+    if not request.text.strip():
+        raise HTTPException(status_code=422, detail="Story text cannot be empty.")
+
+    try:
+        feedback = get_feedback(request.book_id)
+        analysis = analyze_story(request.text, feedback)
+        script = build_narration_script(
+            analysis,
+            request.book_id,
+            feedback.get("voice_profile", {}),
+        )
+        assigned_profiles = {
+            line["speaker"]: line["voice_profile"] for line in script["lines"]
+        }
+        saved_profiles = feedback.get("voice_profile", {})
+        for speaker, voice_profile in assigned_profiles.items():
+            if speaker not in saved_profiles:
+                save_feedback(request.book_id, "voice_profile", speaker, voice_profile)
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return NarrationScriptResponse(**script)
+
+
 @router.post("/audio/feedback", response_model=AnalysisFeedbackResponse)
 def record_analysis_feedback(
     request: AnalysisFeedbackRequest,
@@ -164,12 +231,17 @@ def record_analysis_feedback(
         "warm",
     }
     valid_music_moods = {"calm", "wonder", "tense", "reflective", "mysterious", "joyful"}
+    valid_voice_profiles = set(VOICE_PROFILES)
     if request.category == "emotion" and request.corrected_value not in valid_emotions:
         raise HTTPException(status_code=422, detail="Unsupported emotion correction.")
     if request.category == "music_mood" and request.corrected_value not in valid_music_moods:
         raise HTTPException(status_code=422, detail="Unsupported music mood correction.")
+    if request.category == "voice_profile" and request.corrected_value not in valid_voice_profiles:
+        raise HTTPException(status_code=422, detail="Unsupported voice profile.")
     if request.category == "music_mood" and request.target_text:
         raise HTTPException(status_code=422, detail="Music mood feedback must not target text.")
+    if request.category == "voice_profile" and not request.target_text.strip():
+        raise HTTPException(status_code=422, detail="Voice profile feedback requires a speaker.")
     if request.category != "music_mood" and not request.target_text.strip():
         raise HTTPException(status_code=422, detail="Speaker and emotion feedback require target text.")
 

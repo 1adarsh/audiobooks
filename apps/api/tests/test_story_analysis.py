@@ -80,6 +80,7 @@ class StoryAnalysisTests(unittest.TestCase):
             with patch.dict(os.environ, {"STORYBOOK_DATA_DIR": data_directory}):
                 save_feedback(" The Lantern Gate ", "music_mood", "", "wonder")
                 save_feedback("the lantern gate", "music_mood", "", "reflective")
+                save_feedback("the lantern gate", "voice_profile", "Mira", "deep_male")
                 save_feedback("another book", "music_mood", "", "tense")
 
                 corrections = get_feedback("THE LANTERN GATE")
@@ -88,6 +89,7 @@ class StoryAnalysisTests(unittest.TestCase):
                 self.assertTrue(saved_database.is_file())
 
         self.assertEqual(corrections["music_mood"][""], "reflective")
+        self.assertEqual(corrections["voice_profile"]["Mira"], "deep_male")
         self.assertEqual(other_book["music_mood"][""], "tense")
 
     def test_hosted_selector_stays_local_when_not_configured(self) -> None:
