@@ -44,37 +44,33 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "Missing required GitHub Actions secret: ANDROID_KEYSTORE_BASE64" >&2
-            exit 1
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] && [ -n "$ANDROID_KEY_ALIAS" ] && [ -n "$ANDROID_KEY_PASSWORD" ]; then
+            keystore_path="$RUNNER_TEMP/storybook-audio-upload-key.jks"
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
+            echo "ANDROID_KEYSTORE_FILE=$keystore_path" >> "$GITHUB_ENV"
+            echo "ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "ANDROID_KEY_ALIAS=$ANDROID_KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "ANDROID_KEY_PASSWORD=$ANDROID_KEY_PASSWORD" >> "$GITHUB_ENV"
+            echo "HAS_ANDROID_SIGNING=true" >> "$GITHUB_ENV"
+          else
+            echo "Android signing secrets not configured; building debug APK only for the download link."
+            echo "HAS_ANDROID_SIGNING=false" >> "$GITHUB_ENV"
           fi
-          if [ -z "$ANDROID_KEYSTORE_PASSWORD" ]; then
-            echo "Missing required GitHub Actions secret: ANDROID_KEYSTORE_PASSWORD" >&2
-            exit 1
-          fi
-          if [ -z "$ANDROID_KEY_ALIAS" ]; then
-            echo "Missing required GitHub Actions secret: ANDROID_KEY_ALIAS" >&2
-            exit 1
-          fi
-          if [ -z "$ANDROID_KEY_PASSWORD" ]; then
-            echo "Missing required GitHub Actions secret: ANDROID_KEY_PASSWORD" >&2
-            exit 1
-          fi
-          keystore_path="$RUNNER_TEMP/storybook-audio-upload-key.jks"
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
-          echo "ANDROID_KEYSTORE_FILE=$keystore_path" >> "$GITHUB_ENV"
 
       - name: Build debug APK
         run: npm run build:android:debug-apk --workspace @storybook-audio/mobile
 
       - name: Build signed release APK
+        if: env.HAS_ANDROID_SIGNING == 'true'
         run: npm run android:apk
 
       - name: Prepare Android release assets
         run: |
           mkdir -p release-assets
           cp apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk release-assets/storybook-audio.apk
-          cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk release-assets/storybook-audio-android-release.apk
+          if [ -f apps/mobile/android/app/build/outputs/apk/release/app-release.apk ]; then
+            cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk release-assets/storybook-audio-android-release.apk
+          fi
 
       - name: Upload Android release assets
         uses: actions/upload-artifact@v4
