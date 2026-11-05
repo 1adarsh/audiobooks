@@ -32,6 +32,8 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - name: Install dependencies
         run: npm ci
@@ -105,7 +107,7 @@ jobs:
             echo "Expo did not generate an iOS workspace." >&2
             exit 1
           fi
-          scheme="$(xcodebuild -list -json -workspace "$workspace" | node -e 'let input = ""; process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => { const result = JSON.parse(input); const schemes = result.workspace?.schemes ?? result.project?.schemes ?? []; if (!schemes.length) process.exit(1); process.stdout.write(schemes[0]); });')"
+          scheme="$(xcodebuild -list -json -workspace "$workspace" | node -e 'let input = ""; process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => { const result = JSON.parse(input); const schemes = result.workspace?.schemes ?? result.project?.schemes ?? []; const appScheme = schemes.find(candidate => !/^Pods-/i.test(candidate)); if (!appScheme) { console.error(`No app scheme found. Available schemes: ${schemes.join(", ")}`); process.exit(1); } process.stdout.write(appScheme); });')"
           xcodebuild \
             -workspace "$workspace" \
             -scheme "$scheme" \
@@ -114,7 +116,7 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/storybook-audio-ios" \
             CODE_SIGNING_ALLOWED=NO \
             build
-          app_path="$(find "$RUNNER_TEMP/storybook-audio-ios/Build/Products/Release-iphonesimulator" -maxdepth 1 -name '*.app' -print -quit)"
+          app_path="$(find "$RUNNER_TEMP/storybook-audio-ios/Build/Products/Release-iphonesimulator" -type d -name '*.app' -print -quit)"
           if [ -z "$app_path" ]; then
             echo "Xcode did not produce an iOS Simulator app bundle." >&2
             exit 1
@@ -177,6 +179,8 @@ jobs:
     steps:
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - name: Deploy web app
         id: deployment
