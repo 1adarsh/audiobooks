@@ -23,6 +23,14 @@ ai = [
   "spacy>=3.8,<4.0",
   "tokenizers>=0.21,<1.0",
 ]
+ocr = [
+  "pdf2image>=1.17,<2.0",
+  "pytesseract>=0.3.13,<1.0",
+]
+neural-voice = [
+  "huggingface-hub>=0.27,<2.0",
+  "piper-tts>=1.8,<2.0",
+]
 
 [tool.setuptools.packages.find]
 include = ["app*"]

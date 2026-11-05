@@ -15,7 +15,8 @@
       "./plugins/withAndroidSecurity"
     ],
     "experiments": {
-      "typedRoutes": true
+      "typedRoutes": true,
+      "baseUrl": "/audiobooks"
     },
     "web": {
       "bundler": "metro"

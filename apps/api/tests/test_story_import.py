@@ -1,6 +1,7 @@
 import io
 import unittest
 import zipfile
+from unittest.mock import MagicMock, patch
 
 from docx import Document
 
@@ -54,6 +55,27 @@ class StoryImportTests(unittest.TestCase):
         self.assertEqual(
             extract_story_text("chapter.docx", self.create_docx()),
             "Chapter One\nThe story begins.",
+        )
+
+    @patch("app.services.story_import.pytesseract")
+    @patch("app.services.story_import.convert_from_bytes")
+    @patch("app.services.story_import.PdfReader")
+    def test_extracts_scanned_pdfs_with_ocr(
+        self,
+        pdf_reader,
+        convert_from_bytes,
+        pytesseract,
+    ) -> None:
+        reader = MagicMock()
+        reader.is_encrypted = False
+        reader.pages = [MagicMock(extract_text=MagicMock(return_value=""))]
+        pdf_reader.return_value = reader
+        convert_from_bytes.return_value = [MagicMock()]
+        pytesseract.image_to_string.return_value = "Scanned page text"
+
+        self.assertEqual(
+            extract_story_text("chapter.pdf", b"%PDF-1.4"),
+            "Scanned page text",
         )
 
     def test_extracts_plain_markdown_and_html_text(self) -> None:

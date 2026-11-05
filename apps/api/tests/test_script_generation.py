@@ -248,8 +248,54 @@ class ScriptGenerationTests(unittest.TestCase):
             1,
             "gentle",
             ["deep_male"],
+            None,
         )
         self.assertEqual(response.chapters, 1)
+
+    def test_audio_generation_passes_validated_chapter_plan_to_renderer(self) -> None:
+        request = AudioGenerationRequest(
+            text="Chapter One\nThe river widened.\nChapter Two\nThe boat drifted.",
+            chapter_count=2,
+            chapter_texts=[
+                "Chapter One\nThe river widened.",
+                "Chapter Two\nThe boat drifted.",
+            ],
+        )
+
+        with patch(
+            "app.api.routes.audio.render_audio",
+            return_value=("generated-id", 2, []),
+        ) as render:
+            response = generate_audio(request)
+
+        render.assert_called_once_with(
+            request.text,
+            2,
+            "gentle",
+            None,
+            [1, 1],
+        )
+        self.assertEqual(response.chapters, 2)
+
+    def test_audio_generation_rejects_chapter_plan_that_changes_story_text(self) -> None:
+        request = AudioGenerationRequest(
+            text="The river widened. The boat drifted.",
+            chapter_count=2,
+            chapter_texts=["The river widened.", "Someone else spoke."],
+        )
+
+        with self.assertRaisesRegex(HTTPException, "Chapter plan must preserve"):
+            generate_audio(request)
+
+    def test_audio_generation_rejects_plan_that_drops_headings(self) -> None:
+        request = AudioGenerationRequest(
+            text="Chapter One\nThe river widened.\nChapter Two\nThe boat drifted.",
+            chapter_count=2,
+            chapter_texts=["The river widened.", "The boat drifted."],
+        )
+
+        with self.assertRaisesRegex(HTTPException, "Chapter plan must preserve"):
+            generate_audio(request)
 
     def test_audio_generation_rejects_script_that_does_not_match_story(self) -> None:
         request = AudioGenerationRequest(

@@ -90,6 +90,38 @@ export async function getApiHealth(): Promise<{ status: string }> {
   return response.json() as Promise<{ status: string }>;
 }
 
+export async function suggestChapterPlan(
+  text: string,
+  chapterCount = 1,
+): Promise<{ chapters: string[]; chapterCount: number }> {
+  const baseUrl = await getApiBaseUrl();
+  const response = await fetchApi(`${baseUrl}/api/audio/chapters`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      text,
+      chapter_count: chapterCount,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await getApiError(response, "Unable to suggest chapter breaks"));
+  }
+
+  const result = (await response.json()) as {
+    chapters?: string[];
+    chapter_count?: number;
+  };
+  const chapters = Array.isArray(result.chapters) ? result.chapters : [];
+  const chapterPlanCount = Number.isFinite(result.chapter_count)
+    ? Number(result.chapter_count)
+    : chapters.length;
+
+  return { chapters, chapterCount: chapterPlanCount };
+}
+
 export interface GeneratedAudio {
   audioUrl: string;
   downloadUrl: string;
@@ -233,6 +265,7 @@ export async function generateAudio(
   onUploadProgress?: (progress: number) => void,
   voiceStyle: NarrationStyle = "gentle",
   scriptLines?: NarrationScript["lines"],
+  chapterTexts?: string[],
 ): Promise<GeneratedAudio> {
   const baseUrl = await getApiBaseUrl();
   const payload = JSON.stringify({
@@ -240,6 +273,7 @@ export async function generateAudio(
     title,
     chapter_count: chapterCount,
     voice_style: voiceStyle,
+    chapter_texts: chapterTexts,
     script_lines: scriptLines?.map((line) => ({
       number: line.number,
       speaker: line.speaker,

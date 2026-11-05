@@ -28,13 +28,7 @@ packages/
 
 ## Getting started
 
-Requirements: Node.js and npm; Python 3.11+ and eSpeak for local narration.
-
-On Debian/Ubuntu, install the speech engine with:
-
-```sh
-sudo apt install espeak
-```
+Requirements: Node.js and npm; Python 3.11+ for the API.
 
 ```sh
 npm install
@@ -47,12 +41,21 @@ In another terminal:
 cd apps/api
 python -m venv .venv
 source .venv/bin/activate
-pip install -e .
+pip install -e ".[neural-voice]"
+python -m app.services.download_voice_models
 uvicorn app.main:app --reload
 ```
 
+The local neural voice models total about 250 MB and are cached outside the
+repository. Piper runs on the API machine, so story text is not sent to a
+third-party speech service.
+
 The API health check is at `http://localhost:8000/api/health`; interactive API
-docs are at `http://localhost:8000/docs`.
+docs are at `http://localhost:8000/docs`. The chapter-planning endpoint
+`POST /api/audio/chapters` suggests balanced chapter splits or preserves
+explicit chapter headings when your story already contains them. Use
+**Suggest chapter breaks** in the Chapters tab to preview the plan; conversion
+uses the chosen boundaries for chapter pauses and player labels.
 
 To make audio in the app, choose a PDF, Word (`.docx`), OpenDocument Text
 (`.odt`), HTML, Markdown, or UTF-8 text file to import its text, or paste story
@@ -61,11 +64,15 @@ default voice, or **Expressive** when you want a livelier delivery. Then choose
 **Convert to audiobook**; the progress indicator shows upload and rendering
 status. When conversion finishes, tap **Play** to start audio on the device's
 selected output (including connected Bluetooth devices). Sentence timings from
-the rendered audio drive the player highlights. The local eSpeak voice is
-computer-generated and less natural than a hosted neural voice; **Gentle** uses
-a slower pace and lower output level. **Download WAV** saves a copy.
-Scanned PDFs without selectable text need OCR, which is not implemented yet.
-For a physical device, set the API server address in the app to the computer's
+the rendered audio drive the player highlights. **Gentle** uses a calmer pace
+and reduced output level; **Expressive** is slightly quicker. **Download WAV**
+saves a copy. The neural voices are provided by Piper; its Python package is
+GPL-3.0-or-later, and the voice model cards document each training dataset's
+license. The app retains a softened eSpeak compatibility mode
+(`STORYBOOK_TTS_ENGINE=espeak`), though it will sound more synthetic. Scanned
+PDFs without selectable text can be processed with OCR when the optional OCR
+packages are installed (`pip install -e ".[ocr]"` in the API venv, plus a local
+Tesseract binary on the machine). For a physical device, set the API server address in the app to the computer's
 reachable Wi-Fi address (for example, `http://192.168.1.20:8000`). Do not use
 `localhost` on a phone: that points to the phone itself. Keep the API running
 on the computer with `--host 0.0.0.0`, and connect both devices to the same
@@ -82,9 +89,18 @@ computer or hosted server the phone can reach.
 [Download the latest Android APK](https://github.com/1adarsh/audiobooks/releases/latest/download/storybook-audio.apk)
 
 To publish a new download, push a version tag such as `v0.1.1`; GitHub Actions
-builds the debug APK and attaches it to that GitHub release. The downloadable
-APK is debug-signed, so use the local release-build instructions below for a
-production-signed APK.
+builds the debug APK, production-signed APK, iOS Simulator app bundle, and web
+ZIP, then attaches them to that GitHub release. The same workflow deploys the
+web app to GitHub Pages. The APK at the link above is debug-signed; use the
+`storybook-audio-android-release.apk` asset for production installations.
+
+Before creating a release, add these repository Actions secrets for Android
+signing: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`,
+`ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD`. Encode the private keystore
+file as a single-line Base64 value; never commit or share the keystore or its
+passwords. Enable GitHub Pages with **GitHub Actions** as the deployment source.
+The iOS download is a Simulator-only app bundle and cannot be installed on a
+physical iPhone; a device IPA requires Apple signing credentials.
 
 ### Build locally
 
@@ -179,25 +195,25 @@ Building or running an iOS native app requires macOS and Xcode.
 2. Detect chapter boundaries or let the reader choose a target chapter count.
 3. Use local NLP to suggest named characters and narrator passages; let the
    reader correct speakers and save those corrections per book. Narration
-   scripts assign stable per-book eSpeak voice profiles to each speaker, and
+   scripts assign stable per-book neural voice profiles to each speaker, and
    the reader can change and reuse those assignments.
 4. Classify sentence emotions and suggest soundtrack moods, with reader
    corrections saved per book. The app can generate a speaker- and
    delivery-tagged narration script from analyzed sentences while preserving
    the original wording. Track selection remains future work.
-5. Render narration with per-character voice assignments, then mix
-   optional effects and music into chapter audio.
+5. Render narration with per-character neural voice assignments and chosen
+   chapter boundaries, then mix optional effects and music into chapter audio.
 6. Review, regenerate, and play chapters.
 
-Pasting story text into the mobile app and choosing **Convert to audio** sends
-the text to the local API, which renders a WAV with the system eSpeak voice.
-The app can play that file and download it. Playback must be started with **Play**
-after conversion, which also works around browser autoplay restrictions.
+Pasting story text into the mobile app and choosing **Convert to audiobook**
+sends the text to the local API, which renders a WAV with the configured local
+neural voices. The app can play that file and download it. Playback must be
+started with **Play** after conversion, which also works around browser autoplay restrictions.
 Generated files are kept in the
 system temporary directory and are not a durable media library. AI analysis
 is a separate step: it suggests character speakers, emotions, and soundtrack
-moods. Generated scripts can apply distinct eSpeak voice profiles consistently
-per speaker and book. Change a speaker's profile in the Characters tab, then
+moods. Generated scripts apply distinct neural voice profiles consistently per
+speaker and book. Change a speaker's profile in the Characters tab, then
 convert the story again to apply it. For scripts over 250 sentences, profiles
 apply to the analyzed lines and the selected narration style is used for the
 remaining audio. Music tracks are not mixed into playback yet. OCR for scanned

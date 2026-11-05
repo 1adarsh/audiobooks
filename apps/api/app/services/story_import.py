@@ -10,6 +10,16 @@ from docx import Document
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
+try:
+    from pdf2image import convert_from_bytes
+except ImportError:  # pragma: no cover - optional OCR dependency
+    convert_from_bytes = None  # type: ignore[assignment]
+
+try:
+    import pytesseract
+except ImportError:  # pragma: no cover - optional OCR dependency
+    pytesseract = None  # type: ignore[assignment]
+
 MAX_DOCUMENT_SIZE = 20 * 1024 * 1024
 MAX_EXTRACTED_TEXT_LENGTH = 120_000
 MAX_ODT_CONTENT_SIZE = 20 * 1024 * 1024
@@ -124,9 +134,35 @@ def _extract_pdf_text(content: bytes) -> str:
         reader = PdfReader(BytesIO(content), strict=False)
         if reader.is_encrypted:
             raise ValueError("The selected PDF is password-protected.")
-        return "\n".join(page.extract_text() or "" for page in reader.pages).strip()
+        extracted = "\n".join(page.extract_text() or "" for page in reader.pages).strip()
+        if extracted:
+            return extracted
     except PdfReadError as error:
         raise ValueError("The selected file is not a valid PDF.") from error
+
+    if convert_from_bytes is None or pytesseract is None:
+        raise ValueError(
+            "The PDF appears to be scanned and OCR support is not installed. "
+            "Install the OCR dependencies to import scanned documents."
+        )
+
+    try:
+        images = convert_from_bytes(content, dpi=300, fmt="PNG")
+        pages_text = [
+            pytesseract.image_to_string(image).strip() for image in images if image is not None
+        ]
+        combined_text = "\n".join(page for page in pages_text if page)
+        if combined_text:
+            return combined_text
+    except Exception as error:  # pragma: no cover - depends on external OCR packages
+        raise ValueError(
+            "The PDF appears to be scanned, but OCR could not read it. "
+            "Check the OCR dependencies and try another scan."
+        ) from error
+
+    raise ValueError(
+        "No selectable text was found in this document. Scanned PDFs need OCR before import."
+    )
 
 
 def _extract_docx_text(content: bytes) -> str:

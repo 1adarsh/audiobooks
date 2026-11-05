@@ -6,6 +6,7 @@
   "scripts": {
     "start": "expo start",
     "web": "expo start --web",
+    "export:web": "expo export --platform web --output-dir dist",
     "build:android:debug-apk": "expo prebuild --platform android && cd android && ./gradlew assembleDebug",
     "build:android:apk": "expo prebuild --platform android && cd android && ./gradlew assembleRelease",
     "typecheck": "tsc --noEmit",

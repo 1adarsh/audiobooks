@@ -14,3 +14,9 @@ Requires-Dist: numpy>=1.26; extra == "ai"
 Requires-Dist: onnxruntime<2.0,>=1.20; extra == "ai"
 Requires-Dist: spacy<4.0,>=3.8; extra == "ai"
 Requires-Dist: tokenizers<1.0,>=0.21; extra == "ai"
+Provides-Extra: ocr
+Requires-Dist: pdf2image<2.0,>=1.17; extra == "ocr"
+Requires-Dist: pytesseract<1.0,>=0.3.13; extra == "ocr"
+Provides-Extra: neural-voice
+Requires-Dist: huggingface-hub<2.0,>=0.27; extra == "neural-voice"
+Requires-Dist: piper-tts<2.0,>=1.8; extra == "neural-voice"

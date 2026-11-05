@@ -1,7 +1,8 @@
-"""Local WAV narration rendering using the system eSpeak executable."""
+"""Local WAV narration using Piper neural voices or the eSpeak fallback."""
 
 import array
 import io
+import os
 import re
 import shutil
 import subprocess
@@ -9,8 +10,10 @@ import tempfile
 import uuid
 import wave
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
+from app.services.piper_voices import get_piper_voice_path
 from app.services.script_generation import VOICE_PROFILES
 
 MAX_TEXT_LENGTH = 120_000
@@ -19,6 +22,7 @@ OUTPUT_DIRECTORY = Path(tempfile.gettempdir()) / "storybook-audio"
 SENTENCE_GAP_SECONDS = 0.12
 CHAPTER_GAP_SECONDS = 0.6
 SENTENCE_PATTERN = re.compile(r'[^.!?\n]+(?:[.!?]+(?:["”’])?|$)')
+DEFAULT_VOICE_PROFILE = "gentle_female"
 
 
 @dataclass(frozen=True)
@@ -80,10 +84,29 @@ def split_sentences(text: str) -> list[str]:
     ]
 
 
-def _make_chapters(text: str, chapter_count: int) -> list[str]:
+def _make_chapters(
+    text: str,
+    chapter_count: int,
+    chapter_sentence_counts: list[int] | None = None,
+) -> list[str]:
     sentences = split_sentences(text)
     if not sentences:
         raise ValueError("Story text must contain at least one sentence.")
+
+    if chapter_sentence_counts is not None:
+        if (
+            len(chapter_sentence_counts) != chapter_count
+            or any(count < 1 for count in chapter_sentence_counts)
+            or sum(chapter_sentence_counts) != len(sentences)
+        ):
+            raise ValueError("Chapter sentence counts must cover the story exactly.")
+
+        chapters: list[str] = []
+        sentence_index = 0
+        for count in chapter_sentence_counts:
+            chapters.append(" ".join(sentences[sentence_index : sentence_index + count]))
+            sentence_index += count
+        return chapters
 
     count = min(chapter_count, len(sentences))
     chapters: list[str] = []
@@ -94,11 +117,68 @@ def _make_chapters(text: str, chapter_count: int) -> list[str]:
     return chapters
 
 
+@lru_cache(maxsize=4)
+def _load_piper_voice(profile: str):
+    model_path = get_piper_voice_path(profile)
+    if not model_path.is_file() or not Path(f"{model_path}.json").is_file():
+        raise RuntimeError(
+            "Local neural voice models are missing. Run "
+            "'python -m app.services.download_voice_models' from apps/api."
+        )
+
+    try:
+        from piper import PiperVoice
+    except ImportError as error:
+        raise RuntimeError(
+            "Neural voice dependencies are missing. Install the API with "
+            "'pip install -e \".[neural-voice]\"'."
+        ) from error
+
+    return PiperVoice.load(model_path)
+
+
+def _synthesize_with_piper(
+    text: str,
+    profile: str,
+    voice_style: str,
+) -> bytes:
+    try:
+        from piper import SynthesisConfig
+    except ImportError as error:
+        raise RuntimeError(
+            "Neural voice dependencies are missing. Install the API with "
+            "'pip install -e \".[neural-voice]\"'."
+        ) from error
+
+    voice = _load_piper_voice(profile)
+    output = io.BytesIO()
+    chunks = voice.synthesize(
+        text,
+        SynthesisConfig(
+            length_scale=1.04 if voice_style == "gentle" else 0.96,
+            volume=0.82,
+        ),
+    )
+    has_audio = False
+    with wave.open(output, "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(voice.config.sample_rate)
+        for chunk in chunks:
+            has_audio = True
+            audio.writeframes(chunk.audio_int16_bytes)
+
+    if not has_audio:
+        raise RuntimeError("Neural speech synthesis returned empty audio.")
+    return output.getvalue()
+
+
 def render_audio(
     text: str,
     chapter_count: int,
     voice_style: str = "gentle",
     sentence_voice_profiles: list[str] | None = None,
+    chapter_sentence_counts: list[int] | None = None,
 ) -> tuple[str, int, list[SentenceTiming]]:
     """Render an audiobook and return its ID, chapter count, and sentence timings."""
     normalized_text = text.strip()
@@ -111,17 +191,21 @@ def render_audio(
     if voice_style not in {"gentle", "expressive"}:
         raise ValueError("Voice style must be gentle or expressive.")
 
-    executable = shutil.which("espeak")
-    if executable is None:
+    speech_engine = os.environ.get("STORYBOOK_TTS_ENGINE", "neural").strip().casefold()
+    if speech_engine not in {"neural", "espeak"}:
+        raise ValueError("Speech engine must be neural or espeak.")
+    executable = shutil.which("espeak") if speech_engine == "espeak" else None
+    if speech_engine == "espeak" and executable is None:
         raise RuntimeError(
-            "eSpeak is required for local audio rendering. Install the system package 'espeak'."
+            "eSpeak is required for the espeak narration engine. "
+            "Install the system package 'espeak' or use the neural engine."
         )
 
-    chapters = _make_chapters(normalized_text, chapter_count)
+    chapters = _make_chapters(normalized_text, chapter_count, chapter_sentence_counts)
     voice_options = (
-        ["-v", "en-us+f3", "-s", "135", "-p", "46", "-a", "100"]
+        ["-v", "en-us+f3", "-s", "135", "-p", "46", "-a", "80"]
         if voice_style == "gentle"
-        else ["-v", "en-us", "-s", "165", "-p", "50", "-a", "100"]
+        else ["-v", "en-us", "-s", "155", "-p", "50", "-a", "80"]
     )
     sentences = split_sentences(normalized_text)
     if sentence_voice_profiles is not None:
@@ -130,13 +214,12 @@ def render_audio(
         if any(profile not in VOICE_PROFILES for profile in sentence_voice_profiles):
             raise ValueError("Story contains an unsupported voice profile.")
     chapter_count_actual = len(chapters)
-    chapter_ranges = [
-        (
-            chapter_index * len(sentences) // chapter_count_actual,
-            (chapter_index + 1) * len(sentences) // chapter_count_actual,
-        )
-        for chapter_index in range(chapter_count_actual)
-    ]
+    chapter_ranges: list[tuple[int, int]] = []
+    chapter_start = 0
+    for chapter in chapters:
+        chapter_end = chapter_start + len(split_sentences(chapter))
+        chapter_ranges.append((chapter_start, chapter_end))
+        chapter_start = chapter_end
 
     audio_id = str(uuid.uuid4())
     OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
@@ -147,27 +230,36 @@ def render_audio(
         sample_params: wave._wave_params | None = None
         written_frames = 0
         for sentence_index, sentence in enumerate(sentences):
-            sentence_voice_options = voice_options
-            if sentence_voice_profiles is not None and sentence_index < len(sentence_voice_profiles):
-                profile = VOICE_PROFILES[sentence_voice_profiles[sentence_index]]
-                sentence_voice_options = [
-                    "-v",
-                    profile["voice"],
-                    "-s",
-                    "135" if voice_style == "gentle" else "165",
-                    "-p",
-                    str(profile["pitch"]),
-                    "-a",
-                    "100",
-                ]
-            result = subprocess.run(
-                [executable, "--stdout", "--stdin", *sentence_voice_options],
-                input=sentence.encode("utf-8"),
-                check=True,
-                capture_output=True,
-                timeout=30,
+            profile = (
+                sentence_voice_profiles[sentence_index]
+                if sentence_voice_profiles is not None
+                and sentence_index < len(sentence_voice_profiles)
+                else DEFAULT_VOICE_PROFILE
             )
-            wav_data = result.stdout
+            if speech_engine == "neural":
+                wav_data = _synthesize_with_piper(sentence, profile, voice_style)
+            else:
+                sentence_voice_options = voice_options
+                if sentence_voice_profiles is not None and sentence_index < len(sentence_voice_profiles):
+                    voice_profile = VOICE_PROFILES[profile]
+                    sentence_voice_options = [
+                        "-v",
+                        voice_profile["voice"],
+                        "-s",
+                        "135" if voice_style == "gentle" else "155",
+                        "-p",
+                        str(voice_profile["pitch"]),
+                        "-a",
+                        "80",
+                    ]
+                result = subprocess.run(
+                    [executable, "--stdout", "--stdin", *sentence_voice_options],
+                    input=sentence.encode("utf-8"),
+                    check=True,
+                    capture_output=True,
+                    timeout=30,
+                )
+                wav_data = result.stdout
             with wave.open(io.BytesIO(wav_data), "rb") as chapter_audio:
                 params = chapter_audio.getparams()
                 pcm = chapter_audio.readframes(chapter_audio.getnframes())

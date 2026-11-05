@@ -10,6 +10,7 @@ import {
   View,
   type ScrollViewInstance,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as DocumentPicker from "expo-document-picker";
 import { Audio, type AVPlaybackStatus } from "expo-av";
 import * as Linking from "expo-linking";
@@ -24,6 +25,7 @@ import {
   type NarrationStyle,
   saveAnalysisFeedback,
   setApiBaseUrl,
+  suggestChapterPlan,
   voiceProfileOptions,
   type GeneratedAudio,
   type NarrationScript,
@@ -31,6 +33,8 @@ import {
 } from "../../../services/api/client";
 
 const playbackSpeeds = [0.75, 1, 1.25, 1.5, 2];
+const LIBRARY_STORAGE_KEY = "storybook-audio-library";
+const MAX_LIBRARY_ITEMS = 6;
 const workspaceTabs = [
   { id: "story", label: "Story", hint: "Import and convert" },
   { id: "cast", label: "Characters", hint: "Review speakers" },
@@ -39,6 +43,18 @@ const workspaceTabs = [
   { id: "player", label: "Listen", hint: "Play the result" },
 ] as const;
 type WorkspaceTab = (typeof workspaceTabs)[number]["id"];
+
+type LibraryEntry = {
+  title: string;
+  preview: string;
+  storyText: string;
+  lastOpenedAt: string;
+};
+
+function summarizeStory(storyText: string): string {
+  const compactText = storyText.replace(/\s+/g, " ").trim();
+  return compactText.length > 110 ? `${compactText.slice(0, 110).trim()}…` : compactText;
+}
 
 function buildGeneratedCues(bookName: string, chapterCountValue: string): PlaybackCue[] {
   const rawChapterCount = Number.parseInt(chapterCountValue || "1", 10);
@@ -70,12 +86,32 @@ function formatAudioTime(seconds: number): string {
   ).padStart(2, "0")}`;
 }
 
-function buildStoryCues(storyText: string, chapterCountValue: string): PlaybackCue[] {
+function buildStoryCues(
+  storyText: string,
+  chapterCountValue: string,
+  chapterPlan?: string[],
+): PlaybackCue[] {
   const sentences =
     storyText
       .match(/[^.!?\n]+(?:[.!?]+(?:["”’])?|$)/g)
       ?.map((sentence) => sentence.trim())
       .filter(Boolean) ?? [];
+  const plannedChapterSizes = chapterPlan?.map(
+    (chapter) =>
+      chapter.match(/[^.!?\n]+(?:[.!?]+(?:["”’])?|$)/g)?.filter((line) => line.trim())
+        .length ?? 0,
+  ) ?? [];
+  const hasValidChapterPlan =
+    chapterPlan !== undefined &&
+    plannedChapterSizes.length === chapterPlan.length &&
+    plannedChapterSizes.every((size) => size > 0) &&
+    plannedChapterSizes.reduce((total, size) => total + size, 0) === sentences.length;
+  const plannedChapterEnds = hasValidChapterPlan
+    ? plannedChapterSizes.reduce<number[]>((ends, size) => {
+        ends.push((ends.at(-1) ?? 0) + size);
+        return ends;
+      }, [])
+    : [];
   const rawChapterCount = Number.parseInt(chapterCountValue || "1", 10);
   const requestedCount = Number.isFinite(rawChapterCount)
     ? Math.max(1, Math.min(rawChapterCount, 12))
@@ -83,10 +119,16 @@ function buildStoryCues(storyText: string, chapterCountValue: string): PlaybackC
   const chapterTotal = Math.min(requestedCount, sentences.length);
 
   return sentences.map((sentence, sentenceIndex) => {
-    const chapterNumber = Math.min(
-      chapterTotal,
-      Math.floor((sentenceIndex * chapterTotal) / sentences.length) + 1,
+    const plannedChapterIndex = plannedChapterEnds.findIndex(
+      (chapterEnd) => sentenceIndex < chapterEnd,
     );
+    const chapterNumber =
+      plannedChapterIndex >= 0
+        ? plannedChapterIndex + 1
+        : Math.min(
+            chapterTotal,
+            Math.floor((sentenceIndex * chapterTotal) / sentences.length) + 1,
+          );
     const elapsedSeconds = Math.round(
       (sentences
         .slice(0, sentenceIndex)
@@ -116,6 +158,10 @@ export function HomeScreen() {
   const [apiSettingsOpen, setApiSettingsOpen] = useState(false);
   const [isSavingApiUrl, setIsSavingApiUrl] = useState(false);
   const [chapterCount, setChapterCount] = useState("1");
+  const [chapterPlan, setChapterPlan] = useState<string[]>([]);
+  const [chapterPlanDrafts, setChapterPlanDrafts] = useState<string[]>([]);
+  const [isSuggestingChapters, setIsSuggestingChapters] = useState(false);
+  const [chapterPlanMessage, setChapterPlanMessage] = useState("");
   const [voiceStyle, setVoiceStyle] = useState<NarrationStyle>("gentle");
   const [book, setBook] = useState<PickedBook | null>(null);
   const [pastedStory, setPastedStory] = useState("");
@@ -123,6 +169,7 @@ export function HomeScreen() {
   const [activeStoryText, setActiveStoryText] = useState("");
   const [activeBookTitle, setActiveBookTitle] = useState("");
   const [storyAnalysis, setStoryAnalysis] = useState<StoryAnalysis | null>(null);
+  const [libraryBooks, setLibraryBooks] = useState<LibraryEntry[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [narrationScript, setNarrationScript] = useState<NarrationScript | null>(null);
   const [isGeneratingScript, setIsGeneratingScript] = useState(false);
@@ -181,6 +228,106 @@ export function HomeScreen() {
     };
   }, []);
 
+  useEffect(() => {
+    let isMounted = true;
+    async function loadLibrary() {
+      try {
+        const savedLibrary = await AsyncStorage.getItem(LIBRARY_STORAGE_KEY);
+        if (!savedLibrary) {
+          return;
+        }
+        const parsedLibrary = JSON.parse(savedLibrary) as LibraryEntry[];
+        if (!Array.isArray(parsedLibrary) || !isMounted) {
+          return;
+        }
+        setLibraryBooks(
+          parsedLibrary.filter(
+            (entry) =>
+              typeof entry?.title === "string" &&
+              typeof entry?.storyText === "string" &&
+              typeof entry?.lastOpenedAt === "string",
+          ),
+        );
+      } catch {
+        if (isMounted) {
+          setLibraryBooks([]);
+        }
+      }
+    }
+
+    void loadLibrary();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  async function persistLibraryEntry(title: string, storyText: string) {
+    const normalizedTitle = title.trim() || "Untitled story";
+    const normalizedStory = storyText.trim();
+    if (!normalizedStory) {
+      return;
+    }
+
+    const entry: LibraryEntry = {
+      title: normalizedTitle,
+      preview: summarizeStory(normalizedStory),
+      storyText: normalizedStory,
+      lastOpenedAt: new Date().toISOString(),
+    };
+
+    setLibraryBooks((current) => {
+      const deduped = current.filter(
+        (item) =>
+          item.title !== normalizedTitle || item.storyText !== normalizedStory,
+      );
+      const nextLibrary = [entry, ...deduped].slice(0, MAX_LIBRARY_ITEMS);
+      void AsyncStorage.setItem(LIBRARY_STORAGE_KEY, JSON.stringify(nextLibrary)).catch(() => {
+        // Keep the in-memory library working even if persistence is unavailable.
+      });
+      return nextLibrary;
+    });
+  }
+
+  async function openLibraryBook(entry: LibraryEntry) {
+    setBook(null);
+    setPastedStory(entry.storyText);
+    setPastedBookTitle(entry.title);
+    setActiveStoryText(entry.storyText);
+    setActiveBookTitle(entry.title);
+    setChapterPlan([]);
+    setChapterPlanMessage("");
+    setStoryAnalysis(null);
+    setNarrationScript(null);
+    setAnalysisMessage("");
+    setImportError("");
+    setConversionError("");
+    setPlaybackMessage("");
+    setStoryStatus(
+      `${buildStoryCues(entry.storyText, chapterCount).length} sentence lines ready in ${entry.title}.`,
+    );
+    setActiveCueIndex(0);
+    await persistLibraryEntry(entry.title, entry.storyText);
+  }
+
+  async function removeLibraryBook(title: string, storyText: string) {
+    setLibraryBooks((current) => {
+      const nextLibrary = current.filter(
+        (entry) => entry.title !== title || entry.storyText !== storyText,
+      );
+      void AsyncStorage.setItem(LIBRARY_STORAGE_KEY, JSON.stringify(nextLibrary)).catch(() => {
+        // Ignore storage failures while cleaning up the recent list.
+      });
+      return nextLibrary;
+    });
+  }
+
+  async function clearLibraryBooks() {
+    setLibraryBooks([]);
+    await AsyncStorage.removeItem(LIBRARY_STORAGE_KEY).catch(() => {
+      // Ignore storage failures while clearing the recent list.
+    });
+  }
+
   const currentSpeed = playbackSpeeds[speedIndex];
   const bookTitle = useMemo(() => {
     if (activeStoryText) {
@@ -200,7 +347,7 @@ export function HomeScreen() {
         return buildGeneratedCues(bookTitle, chapterCount);
       }
 
-      const cues = buildStoryCues(activeStoryText, chapterCount);
+      const cues = buildStoryCues(activeStoryText, chapterCount, chapterPlan);
       if (
         narrationScript &&
         narrationScript.lines.length <= cues.length
@@ -212,7 +359,7 @@ export function HomeScreen() {
       }
       return cues;
     },
-    [activeStoryText, bookTitle, chapterCount, narrationScript],
+    [activeStoryText, bookTitle, chapterCount, chapterPlan, narrationScript],
   );
 
   useEffect(() => {
@@ -407,6 +554,9 @@ export function HomeScreen() {
       const file = result.assets[0];
       setBook({ name: file.name, uri: file.uri, size: file.size });
       setActiveStoryText("");
+      setChapterPlan([]);
+      setChapterPlanDrafts([]);
+      setChapterPlanMessage("");
       setPastedStory("");
       setImportError("");
       setStoryStatus("");
@@ -422,6 +572,7 @@ export function HomeScreen() {
         setPastedBookTitle(title);
         setActiveStoryText(imported.text);
         setActiveBookTitle(title);
+        await persistLibraryEntry(title, imported.text);
         setStoryAnalysis(null);
         setNarrationScript(null);
         setAnalysisMessage("");
@@ -462,6 +613,10 @@ export function HomeScreen() {
       return;
     }
     setActiveStoryText(trimmedStory);
+    await persistLibraryEntry(pastedBookTitle.trim() || "Pasted story", trimmedStory);
+    setChapterPlan([]);
+    setChapterPlanDrafts([]);
+    setChapterPlanMessage("");
     setActiveBookTitle(pastedBookTitle.trim() || "Pasted story");
     setStoryAnalysis(null);
     setNarrationScript(null);
@@ -522,6 +677,50 @@ export function HomeScreen() {
     } finally {
       setIsGeneratingScript(false);
     }
+  }
+
+  async function suggestChapters() {
+    if (!activeStoryText.trim()) {
+      setChapterPlanMessage("Import or prepare a story before suggesting chapter breaks.");
+      return;
+    }
+
+    setIsSuggestingChapters(true);
+    setChapterPlanMessage("");
+    try {
+      const requestedCount = Number.parseInt(chapterCount || "1", 10);
+      const result = await suggestChapterPlan(
+        activeStoryText,
+        Number.isFinite(requestedCount)
+          ? Math.max(1, Math.min(requestedCount, 12))
+          : 1,
+      );
+      setChapterPlan(result.chapters);
+      setChapterPlanDrafts(result.chapters.map((chapter) => chapter.trim()));
+      setChapterCount(String(result.chapterCount));
+      setChapterPlanMessage(
+        `${result.chapterCount} suggested chapter${result.chapterCount === 1 ? "" : "s"} ready. The plan will be used when you convert.`,
+      );
+    } catch (error) {
+      setChapterPlanMessage(
+        error instanceof Error ? error.message : "Unable to suggest chapter breaks.",
+      );
+    } finally {
+      setIsSuggestingChapters(false);
+    }
+  }
+
+  function updateChapterPlanDraft(index: number, value: string) {
+    setChapterPlanDrafts((current) => {
+      const nextDrafts = [...current];
+      nextDrafts[index] = value;
+      return nextDrafts;
+    });
+    setChapterPlan((current) => {
+      const nextPlan = [...current];
+      nextPlan[index] = value;
+      return nextPlan;
+    });
   }
 
   async function updateVoiceProfile(speaker: string) {
@@ -673,6 +872,8 @@ export function HomeScreen() {
       await clearAudio();
       const requestedChapters = Number.parseInt(chapterCount || "1", 10);
       const scriptLines = narrationScript?.lines;
+      const chaptersToRender =
+        chapterPlan.length === Number(chapterCount) ? chapterPlan : undefined;
       const result = await generateAudio(
         activeStoryText,
         bookTitle,
@@ -687,6 +888,7 @@ export function HomeScreen() {
         },
         voiceStyle,
         scriptLines,
+        chaptersToRender,
       );
       audioTimingsRef.current = result.timings;
       setAudioUrl(result.audioUrl);
@@ -941,6 +1143,47 @@ export function HomeScreen() {
                 {storyStatus}
               </Text>
             ) : null}
+            {libraryBooks.length > 0 ? (
+              <View style={styles.libraryPanel}>
+                <View style={styles.libraryHeaderRow}>
+                  <Text style={styles.libraryTitle}>Recent library</Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => void clearLibraryBooks()}
+                    style={styles.libraryClearButton}
+                  >
+                    <Text style={styles.libraryClearText}>Clear all</Text>
+                  </Pressable>
+                </View>
+                <View style={styles.libraryList}>
+                  {libraryBooks.map((entry) => (
+                    <View key={`${entry.title}-${entry.lastOpenedAt}`} style={styles.libraryCardWrap}>
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={() => void openLibraryBook(entry)}
+                        style={[
+                          styles.libraryCard,
+                          activeBookTitle === entry.title &&
+                            activeStoryText === entry.storyText &&
+                            styles.libraryCardActive,
+                        ]}
+                      >
+                        <Text style={styles.libraryCardTitle}>{entry.title}</Text>
+                        <Text style={styles.libraryCardPreview}>{entry.preview}</Text>
+                      </Pressable>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`Remove ${entry.title} from recent library`}
+                        onPress={() => void removeLibraryBook(entry.title, entry.storyText)}
+                        style={styles.libraryRemoveButton}
+                      >
+                        <Text style={styles.libraryRemoveText}>Remove</Text>
+                      </Pressable>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            ) : null}
             <Text style={styles.fileDetails}>Narration style</Text>
             <View style={styles.voiceStyleRow}>
               {(
@@ -1094,6 +1337,8 @@ export function HomeScreen() {
                   setPastedStory(value);
                   if (activeStoryText) {
                     setActiveStoryText(value);
+                    setChapterPlan([]);
+                    setChapterPlanMessage("");
                     setStoryAnalysis(null);
                     setNarrationScript(null);
                     setAnalysisMessage("");
@@ -1324,7 +1569,12 @@ export function HomeScreen() {
                   key={count}
                   accessibilityRole="button"
                   accessibilityState={{ selected: Number(chapterCount) === count }}
-                  onPress={() => setChapterCount(String(count))}
+                  onPress={() => {
+                    setChapterCount(String(count));
+                    setChapterPlan([]);
+                    setChapterPlanDrafts([]);
+                    setChapterPlanMessage("");
+                  }}
                   style={[
                     styles.chapterChip,
                     Number(chapterCount) === count && styles.chapterChipActive,
@@ -1341,6 +1591,51 @@ export function HomeScreen() {
                 </Pressable>
               ))}
             </View>
+            <Pressable
+              accessibilityRole="button"
+              disabled={
+                isSuggestingChapters || isConverting || !activeStoryText.trim()
+              }
+              onPress={() => void suggestChapters()}
+              style={[
+                styles.secondaryButton,
+                (isSuggestingChapters || isConverting || !activeStoryText.trim()) &&
+                  styles.buttonDisabled,
+              ]}
+            >
+              <Text style={styles.secondaryButtonText}>
+                {isSuggestingChapters ? "Planning chapters…" : "Suggest chapter breaks"}
+              </Text>
+            </Pressable>
+            {chapterPlanMessage ? (
+              <Text
+                accessibilityRole={chapterPlan.length ? "text" : "alert"}
+                style={styles.fileDetails}
+              >
+                {chapterPlanMessage}
+              </Text>
+            ) : null}
+            {chapterPlan.length ? (
+              <View style={styles.chapterPlanPreview}>
+                {chapterPlan.map((chapter, index) => (
+                  <View key={`chapter-plan-${index}`} style={styles.chapterPlanItem}>
+                    <Text style={styles.chapterPlanTitle}>Chapter {index + 1}</Text>
+                    <TextInput
+                      accessibilityLabel={`Edit chapter ${index + 1} text`}
+                      multiline
+                      onChangeText={(value) => updateChapterPlanDraft(index, value)}
+                      placeholder="Describe this chapter's focus"
+                      placeholderTextColor="#8c8178"
+                      style={styles.chapterPlanInput}
+                      value={chapterPlanDrafts[index] ?? chapter}
+                    />
+                    <Text style={styles.chapterPlanText}>
+                      {chapter.replace(/\s+/g, " ").trim()}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
             <Text style={styles.fileDetails}>
               {chapterCount} chapter{chapterCount === "1" ? "" : "s"} ·{" "}
               {activeStoryText
@@ -1543,9 +1838,9 @@ export function HomeScreen() {
           <Text style={styles.noteTitle}>About this audio</Text>
           <Text style={styles.noteText}>
             Local AI suggests character speakers, emotions, and soundtrack moods.
-            Corrections are saved in the local API for the same book. The current
-            eSpeak converter still uses one narrator voice; soundtrack suggestions
-            do not include or play music tracks.
+            Corrections are saved in the local API for the same book. Narration
+            uses local neural voices; soundtrack suggestions do not include or
+            play music tracks.
           </Text>
         </View>
           </>
@@ -1732,6 +2027,79 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
     marginTop: 10,
+  },
+  libraryPanel: {
+    backgroundColor: "#f7f1ea",
+    borderColor: "#e4d7ca",
+    borderRadius: 12,
+    borderWidth: 1,
+    marginTop: 16,
+    padding: 12,
+  },
+  libraryHeaderRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
+  libraryTitle: {
+    color: "#3d342d",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  libraryClearButton: {
+    alignSelf: "flex-start",
+    backgroundColor: "#efe4db",
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  libraryClearText: {
+    color: "#5a3c32",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  libraryList: {
+    gap: 8,
+  },
+  libraryCardWrap: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  libraryCard: {
+    backgroundColor: "#ffffff",
+    borderColor: "#e3d6c9",
+    borderRadius: 10,
+    borderWidth: 1,
+    flex: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  libraryCardActive: {
+    borderColor: "#6d4c41",
+  },
+  libraryCardTitle: {
+    color: "#3d342d",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  libraryCardPreview: {
+    color: "#655e56",
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 4,
+  },
+  libraryRemoveButton: {
+    alignSelf: "center",
+    backgroundColor: "#f2e1d6",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  libraryRemoveText: {
+    color: "#6d4c41",
+    fontSize: 11,
+    fontWeight: "700",
   },
   voiceStyleRow: {
     flexDirection: "row",
@@ -2027,6 +2395,39 @@ const styles = StyleSheet.create({
   },
   chapterChipTextActive: {
     color: "#ffffff",
+  },
+  chapterPlanPreview: {
+    gap: 8,
+    marginTop: 10,
+  },
+  chapterPlanItem: {
+    backgroundColor: "#f0e9df",
+    borderRadius: 10,
+    padding: 12,
+  },
+  chapterPlanTitle: {
+    color: "#4b3027",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  chapterPlanInput: {
+    backgroundColor: "#ffffff",
+    borderColor: "#ded7ce",
+    borderRadius: 8,
+    borderWidth: 1,
+    color: "#28231f",
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 8,
+    minHeight: 70,
+    padding: 10,
+    textAlignVertical: "top",
+  },
+  chapterPlanText: {
+    color: "#655e56",
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 8,
   },
   soundCard: {
     backgroundColor: "#2d1e1a",

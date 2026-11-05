@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from app.services.analysis_feedback import get_feedback, save_feedback
 from app.services.audio_rendering import get_audio_path, render_audio, split_sentences
+from app.services.chaptering import split_story_into_chapters
 from app.services.character_casting import analyze_story
 from app.services.script_generation import VOICE_PROFILES, build_narration_script
 from app.services.story_import import MAX_DOCUMENT_SIZE, extract_story_text
@@ -35,6 +36,7 @@ class AudioGenerationRequest(BaseModel):
     chapter_count: int = Field(default=1, ge=1, le=12)
     voice_style: Literal["gentle", "expressive"] = "gentle"
     script_lines: list[NarrationScriptLine] | None = Field(default=None, max_length=250)
+    chapter_texts: list[str] | None = Field(default=None, max_length=12)
 
 
 class AudioSentenceTiming(BaseModel):
@@ -92,6 +94,16 @@ class StoryAnalysisResponse(BaseModel):
     truncated: bool
 
 
+class StoryChapterPlanRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=120_000)
+    chapter_count: int = Field(default=1, ge=1, le=12)
+
+
+class StoryChapterPlanResponse(BaseModel):
+    chapters: list[str]
+    chapter_count: int
+
+
 class NarrationScriptResponse(BaseModel):
     lines: list[NarrationScriptLine]
     total_lines: int
@@ -125,6 +137,7 @@ async def import_story(file: UploadFile = File(...)) -> StoryImportResponse:
 def generate_audio(request: AudioGenerationRequest) -> AudioGenerationResponse:
     render_text = request.text
     sentence_voice_profiles = None
+    chapter_sentence_counts = None
     if request.script_lines is not None:
         script_texts = [line.text for line in request.script_lines]
         if split_sentences(request.text)[: len(script_texts)] != script_texts:
@@ -135,6 +148,24 @@ def generate_audio(request: AudioGenerationRequest) -> AudioGenerationResponse:
         sentence_voice_profiles = [
             line.voice_profile for line in request.script_lines
         ]
+    if request.chapter_texts is not None:
+        chapter_sentences = [
+            split_sentences(chapter) for chapter in request.chapter_texts
+        ]
+        planned_text = " ".join(" ".join(request.chapter_texts).split())
+        submitted_text = " ".join(request.text.split())
+        if (
+            len(request.chapter_texts) != request.chapter_count
+            or any(not sentences for sentences in chapter_sentences)
+            or [sentence for group in chapter_sentences for sentence in group]
+            != split_sentences(request.text)
+            or planned_text != submitted_text
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Chapter plan must preserve the story text and requested chapter count.",
+            )
+        chapter_sentence_counts = [len(sentences) for sentences in chapter_sentences]
 
     try:
         audio_id, chapter_total, timings = render_audio(
@@ -142,6 +173,7 @@ def generate_audio(request: AudioGenerationRequest) -> AudioGenerationResponse:
             request.chapter_count,
             request.voice_style,
             sentence_voice_profiles,
+            chapter_sentence_counts,
         )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
@@ -152,7 +184,7 @@ def generate_audio(request: AudioGenerationRequest) -> AudioGenerationResponse:
     except subprocess.CalledProcessError as error:
         raise HTTPException(
             status_code=500,
-            detail="Local speech synthesis failed. Check that eSpeak is installed and working.",
+            detail="Local speech synthesis failed. Check the configured speech engine and voice models.",
         ) from error
 
     return AudioGenerationResponse(
@@ -185,6 +217,20 @@ def analyze_audio_story(request: StoryAnalysisRequest) -> StoryAnalysisResponse:
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     return StoryAnalysisResponse(**analysis)
+
+
+@router.post("/audio/chapters", response_model=StoryChapterPlanResponse)
+def suggest_story_chapters(
+    request: StoryChapterPlanRequest,
+) -> StoryChapterPlanResponse:
+    if not request.text.strip():
+        raise HTTPException(status_code=422, detail="Story text cannot be empty.")
+
+    try:
+        chapters = split_story_into_chapters(request.text, request.chapter_count)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return StoryChapterPlanResponse(chapters=chapters, chapter_count=len(chapters))
 
 
 @router.post("/audio/script", response_model=NarrationScriptResponse)
