@@ -90,16 +90,17 @@ computer or hosted server the phone can reach.
 
 To publish a new download, push a version tag such as `v0.1.1`; GitHub Actions
 builds the debug APK, production-signed APK, iOS Simulator app bundle, and web
-ZIP, then attaches them to that GitHub release. The same workflow deploys the
-web app to GitHub Pages. The APK at the link above is debug-signed; use the
+ZIP, then attaches them to that GitHub release. GitHub Pages deployment is
+optional and does not block a release: to enable it, configure the repository's
+Pages source as **GitHub Actions** and set the Actions variable
+`DEPLOY_GITHUB_PAGES` to `true`. The APK at the link above is debug-signed; use the
 `storybook-audio-android-release.apk` asset for production installations.
 
 Before creating a release, add these repository Actions secrets for Android
 signing: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`,
 `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD`. Encode the private keystore
 file as a single-line Base64 value; never commit or share the keystore or its
-passwords. Enable GitHub Pages with **GitHub Actions** as the deployment source.
-The iOS download is a Simulator-only app bundle and cannot be installed on a
+passwords. The iOS download is a Simulator-only app bundle and cannot be installed on a
 physical iPhone; a device IPA requires Apple signing credentials.
 
 ### Build locally

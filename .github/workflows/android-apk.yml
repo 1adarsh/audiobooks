@@ -107,7 +107,7 @@ jobs:
             echo "Expo did not generate an iOS workspace." >&2
             exit 1
           fi
-          scheme="$(xcodebuild -list -json -workspace "$workspace" | node -e 'let input = ""; process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => { const result = JSON.parse(input); const schemes = result.workspace?.schemes ?? result.project?.schemes ?? []; const appScheme = schemes.find(candidate => !/^Pods-/i.test(candidate)); if (!appScheme) { console.error(`No app scheme found. Available schemes: ${schemes.join(", ")}`); process.exit(1); } process.stdout.write(appScheme); });')"
+          scheme="$(xcodebuild -list -json -workspace "$workspace" | node -e 'let input = ""; process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => { const result = JSON.parse(input); const schemes = result.workspace?.schemes ?? result.project?.schemes ?? []; const appScheme = schemes.find(candidate => !/^Pods-/i.test(candidate) && candidate !== "ReactNativeDependencies"); if (!appScheme) { console.error(`No app scheme found. Available schemes: ${schemes.join(", ")}`); process.exit(1); } process.stdout.write(appScheme); });')"
           xcodebuild \
             -workspace "$workspace" \
             -scheme "$scheme" \
@@ -167,6 +167,7 @@ jobs:
           if-no-files-found: error
 
   deploy-pages:
+    if: vars.DEPLOY_GITHUB_PAGES == 'true'
     needs: web
     runs-on: ubuntu-latest
     permissions:
@@ -179,15 +180,13 @@ jobs:
     steps:
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - name: Deploy web app
         id: deployment
         uses: actions/deploy-pages@v4
 
   publish-release:
-    needs: [android, ios-simulator, web, deploy-pages]
+    needs: [android, ios-simulator, web]
     runs-on: ubuntu-latest
     steps:
       - name: Download platform release assets
