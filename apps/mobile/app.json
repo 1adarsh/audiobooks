@@ -3,12 +3,12 @@
     "name": "Storybook Audio",
     "slug": "storybook-audio",
     "scheme": "storybook-audio",
-    "version": "0.1.4",
+    "version": "0.1.5",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "android": {
       "package": "com.storybookaudio.app",
-      "versionCode": 3
+      "versionCode": 4
     },
     "plugins": [
       "expo-router",

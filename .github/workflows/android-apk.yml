@@ -107,7 +107,9 @@ jobs:
             echo "Expo did not generate an iOS workspace." >&2
             exit 1
           fi
-          scheme="$(xcodebuild -list -json -workspace "$workspace" | node -e 'let input = ""; process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => { const result = JSON.parse(input); const schemes = result.workspace?.schemes ?? result.project?.schemes ?? []; const appScheme = schemes.find(candidate => !/^Pods-/i.test(candidate) && candidate !== "ReactNativeDependencies"); if (!appScheme) { console.error(`No app scheme found. Available schemes: ${schemes.join(", ")}`); process.exit(1); } process.stdout.write(appScheme); });')"
+          project_scheme="$(basename "$workspace" .xcworkspace)"
+          available_schemes="$(xcodebuild -list -json -workspace "$workspace")"
+          scheme="$(APP_SCHEME="$project_scheme" node -e 'let input = ""; process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => { const result = JSON.parse(input); const schemes = result.workspace?.schemes ?? result.project?.schemes ?? []; const appScheme = schemes.find(candidate => candidate === process.env.APP_SCHEME); if (!appScheme) { console.error(`App scheme "${process.env.APP_SCHEME}" not found. Available schemes: ${schemes.join(", ")}`); process.exit(1); } process.stdout.write(appScheme); });' <<< "$available_schemes")"
           xcodebuild \
             -workspace "$workspace" \
             -scheme "$scheme" \
