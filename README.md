@@ -46,6 +46,19 @@ python -m app.services.download_voice_models
 uvicorn app.main:app --reload
 ```
 
+## Tests and checks
+
+Run the API unit tests from `apps/api` and the TypeScript checks from the
+repository root:
+
+```sh
+cd apps/api
+python -m unittest discover -s tests -v
+cd ../..
+npm run typecheck
+npm run mobile:web:export
+```
+
 The local neural voice models total about 250 MB and are cached outside the
 repository. Piper runs on the API machine, so story text is not sent to a
 third-party speech service.
@@ -64,11 +77,12 @@ default voice, or **Expressive** when you want a livelier delivery. Then choose
 **Convert to audiobook**; the progress indicator shows upload and rendering
 status. When conversion finishes, tap **Play** to start audio on the device's
 selected output (including connected Bluetooth devices). Sentence timings from
-the rendered audio drive the player highlights. **Gentle** uses a calmer pace
-and reduced output level; **Expressive** is slightly quicker. **Download WAV**
-saves a copy. The neural voices are provided by Piper; its Python package is
-GPL-3.0-or-later, and the voice model cards document each training dataset's
-license. The app retains a softened eSpeak compatibility mode
+the rendered audio drive the player highlights. Mobile playback uses Expo Audio
+(`expo-audio`); the app does not request microphone access. **Gentle** uses a
+calmer pace and reduced output level; **Expressive** is slightly quicker.
+**Download WAV** saves a copy. The neural voices are provided by Piper; its
+Python package is GPL-3.0-or-later, and the voice model cards document each
+training dataset's license. The app retains a softened eSpeak compatibility mode
 (`STORYBOOK_TTS_ENGINE=espeak`), though it will sound more synthetic. Scanned
 PDFs without selectable text can be processed with OCR when the optional OCR
 packages are installed (`pip install -e ".[ocr]"` in the API venv, plus a local
@@ -88,20 +102,24 @@ computer or hosted server the phone can reach.
 
 [Download the latest Android APK](https://github.com/1adarsh/audiobooks/releases/latest/download/storybook-audio.apk)
 
-To publish a new download, push a version tag such as `v0.1.1`; GitHub Actions
-builds the debug APK, production-signed APK, iOS Simulator app bundle, and web
-ZIP, then attaches them to that GitHub release. GitHub Pages deployment is
-optional and does not block a release: to enable it, configure the repository's
-Pages source as **GitHub Actions** and set the Actions variable
-`DEPLOY_GITHUB_PAGES` to `true`. The APK at the link above is debug-signed; use the
-`storybook-audio-android-release.apk` asset for production installations.
+To publish a new download, push a version tag such as `v0.1.6`; GitHub Actions
+builds the production-signed APK, iOS Simulator app bundle, and web ZIP, then
+attaches the assets to that GitHub release. APK and web publishing continue if
+the optional iOS Simulator build fails. GitHub Pages deployment is optional and
+does not block a release: to enable it, configure the repository's Pages source
+as **GitHub Actions** and set the Actions variable `DEPLOY_GITHUB_PAGES` to
+`true`.
 
 Before creating a release, add these repository Actions secrets for Android
 signing: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`,
 `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD`. Encode the private keystore
 file as a single-line Base64 value; never commit or share the keystore or its
-passwords. The iOS download is a Simulator-only app bundle and cannot be installed on a
-physical iPhone; a device IPA requires Apple signing credentials.
+passwords. The release workflow requires all four secrets and publishes only
+the signed, standalone APK. Keep using the same keystore for future updates. If
+you have an older debug-signed APK installed, uninstall it before installing
+the first production-signed release. The iOS download is a Simulator-only app
+bundle and cannot be installed on a physical iPhone; a device IPA requires
+Apple signing credentials.
 
 ### Build locally
 

@@ -5,6 +5,9 @@
     "apps/mobile",
     "packages/shared"
   ],
+  "overrides": {
+    "minimatch": "11.0.9"
+  },
   "scripts": {
     "mobile": "npm run start --workspace @storybook-audio/mobile",
     "mobile:web": "npm run web --workspace @storybook-audio/mobile",

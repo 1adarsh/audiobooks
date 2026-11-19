@@ -12,7 +12,12 @@ import {
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as DocumentPicker from "expo-document-picker";
-import { Audio, type AVPlaybackStatus } from "expo-av";
+import {
+  setAudioModeAsync,
+  useAudioPlayer,
+  useAudioPlayerStatus,
+  type AudioStatus,
+} from "expo-audio";
 import * as Linking from "expo-linking";
 import type { PickedBook, PlaybackCue } from "../types";
 import {
@@ -192,7 +197,8 @@ export function HomeScreen() {
   const [playbackMessage, setPlaybackMessage] = useState("");
   const [speedIndex, setSpeedIndex] = useState(1);
   const [loopChapter, setLoopChapter] = useState(true);
-  const audioRef = useRef<Audio.Sound | null>(null);
+  const audioPlayer = useAudioPlayer(null, { updateInterval: 100 });
+  const audioStatus = useAudioPlayerStatus(audioPlayer);
   const audioTimingsRef = useRef<GeneratedAudio["timings"]>([]);
   const durationRef = useRef(0);
   const lyricScrollRef = useRef<ScrollViewInstance>(null);
@@ -376,17 +382,6 @@ export function HomeScreen() {
   const progress = audioUrl ? audioProgress : 0;
 
   useEffect(() => {
-    return () => {
-      const sound = audioRef.current;
-      if (sound) {
-        void sound.unloadAsync().catch((error: unknown) => {
-          console.error("Failed to unload audiobook audio.", error);
-        });
-      }
-    };
-  }, []);
-
-  useEffect(() => {
     setActiveWordIndex(-1);
     const activeLineOffset = lyricOffsets.current[activeCueIndex];
     if (activeLineOffset !== undefined) {
@@ -397,24 +392,24 @@ export function HomeScreen() {
     }
   }, [activeCueIndex]);
 
-  function handleAudioStatus(status: AVPlaybackStatus) {
-    if (!status.isLoaded) {
-      if (status.error) {
-        setPlaybackMessage(`Audio playback failed: ${status.error}`);
+  useEffect(() => {
+    if (!audioStatus.isLoaded) {
+      if (audioStatus.error) {
+        setPlaybackMessage(`Audio playback failed: ${audioStatus.error}`);
         setIsPlaying(false);
       }
       return;
     }
 
-    const duration = status.durationMillis ?? 0;
-    const position = status.positionMillis;
+    const duration = audioStatus.duration;
+    const position = audioStatus.currentTime;
     durationRef.current = duration;
     setAudioProgress(duration > 0 ? (position / duration) * 100 : 0);
-    setIsPlaying(status.isPlaying);
+    setIsPlaying(audioStatus.playing);
 
     const timings = audioTimingsRef.current;
     if (duration > 0 && timings.length > 0) {
-      const positionSeconds = position / 1000;
+      const positionSeconds = position;
       let cueIndex = timings.findIndex(
         (timing) =>
           positionSeconds >= timing.start && positionSeconds <= timing.end,
@@ -445,36 +440,22 @@ export function HomeScreen() {
       }
     }
 
-    if (status.didJustFinish) {
+    if (audioStatus.didJustFinish) {
       setIsPlaying(false);
     }
-  }
+  }, [audioStatus, generatedCues.length]);
 
   useEffect(() => {
-    const sound = audioRef.current;
-    if (!sound) {
+    if (!audioStatus.isLoaded) {
       return;
     }
 
-    void sound.setRateAsync(currentSpeed, true).catch((error: unknown) => {
-      setPlaybackMessage(
-        error instanceof Error ? error.message : "Unable to change playback speed.",
-      );
-    });
-  }, [currentSpeed]);
+    audioPlayer.setPlaybackRate(currentSpeed, "high");
+  }, [audioPlayer, audioStatus.isLoaded, currentSpeed]);
 
   useEffect(() => {
-    const sound = audioRef.current;
-    if (!sound) {
-      return;
-    }
-
-    void sound.setIsLoopingAsync(loopChapter).catch((error: unknown) => {
-      setPlaybackMessage(
-        error instanceof Error ? error.message : "Unable to update audio looping.",
-      );
-    });
-  }, [loopChapter]);
+    audioPlayer.loop = loopChapter;
+  }, [audioPlayer, loopChapter]);
 
   useEffect(() => {
     if (conversionStage !== "rendering") {
@@ -501,14 +482,12 @@ export function HomeScreen() {
   }, [conversionPulse, conversionStage]);
 
   async function clearAudio() {
-    const sound = audioRef.current;
-    audioRef.current = null;
-    if (sound) {
-      await sound.unloadAsync();
-    }
+    audioPlayer.pause();
+    audioPlayer.replace(null);
     setAudioUrl(null);
     setDownloadUrl(null);
     audioTimingsRef.current = [];
+    durationRef.current = 0;
     setAudioProgress(0);
     setIsPlaying(false);
     setActiveWordIndex(-1);
@@ -895,24 +874,37 @@ export function HomeScreen() {
       setDownloadUrl(result.downloadUrl);
       setConversionStage("loading");
 
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-        shouldDuckAndroid: false,
-        playThroughEarpieceAndroid: false,
+      await setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+        interruptionMode: "mixWithOthers",
+        shouldRouteThroughEarpiece: false,
       });
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: result.audioUrl },
-        {
-          shouldPlay: false,
-          isLooping: loopChapter,
-          volume: 1,
-          progressUpdateIntervalMillis: 100,
-        },
-        handleAudioStatus,
-      );
-      audioRef.current = sound;
-      await sound.setRateAsync(currentSpeed, true);
+      audioPlayer.volume = 1;
+      audioPlayer.loop = loopChapter;
+      await new Promise<void>((resolve, reject) => {
+        let subscription: { remove: () => void } | undefined;
+        subscription = audioPlayer.addListener(
+          "playbackStatusUpdate",
+          (status: AudioStatus) => {
+            if (status.isLoaded || status.error) {
+              subscription?.remove();
+              if (status.error) {
+                reject(new Error(status.error));
+              } else {
+                resolve();
+              }
+            }
+          },
+        );
+        try {
+          audioPlayer.replace(result.audioUrl);
+        } catch (error) {
+          subscription.remove();
+          reject(error);
+        }
+      });
+      audioPlayer.setPlaybackRate(currentSpeed, "high");
       setStoryStatus(
         `Audiobook ready: ${result.chapters} chapter${result.chapters === 1 ? "" : "s"}${scriptLines?.length ? ` with character profiles on the first ${scriptLines.length} sentences` : ""}. Tap Play to listen.`,
       );
@@ -932,26 +924,24 @@ export function HomeScreen() {
   }
 
   async function handlePlayToggle() {
-    const sound = audioRef.current;
-    if (!sound) {
+    if (!audioUrl) {
       setPlaybackMessage("Convert the story to audio before pressing play.");
       return;
     }
 
     try {
-      const status = await sound.getStatusAsync();
-      if (!status.isLoaded) {
-        setPlaybackMessage(status.error ?? "Audio is not ready yet.");
+      if (!audioStatus.isLoaded) {
+        setPlaybackMessage(audioStatus.error ?? "Audio is not ready yet.");
         return;
       }
 
-      if (status.isPlaying) {
-        await sound.pauseAsync();
+      if (audioStatus.playing) {
+        audioPlayer.pause();
       } else {
-        if (status.durationMillis && status.positionMillis >= status.durationMillis) {
-          await sound.setPositionAsync(0);
+        if (audioStatus.duration && audioStatus.currentTime >= audioStatus.duration) {
+          await audioPlayer.seekTo(0);
         }
-        await sound.playAsync();
+        audioPlayer.play();
       }
       setPlaybackMessage("");
     } catch (error) {
@@ -968,7 +958,7 @@ export function HomeScreen() {
     const timing = audioTimingsRef.current[boundedIndex];
     if (timing && durationRef.current > 0) {
       try {
-        await audioRef.current?.setPositionAsync(timing.start * 1000);
+        await audioPlayer.seekTo(timing.start);
       } catch (error) {
         setPlaybackMessage(
           error instanceof Error ? error.message : "Unable to seek to that sentence.",
@@ -985,7 +975,7 @@ export function HomeScreen() {
     const ratio = Math.max(0, Math.min(1, locationX / progressWidth.current));
     if (durationRef.current > 0) {
       try {
-        await audioRef.current?.setPositionAsync(ratio * durationRef.current);
+        await audioPlayer.seekTo(ratio * durationRef.current);
       } catch (error) {
         setPlaybackMessage(
           error instanceof Error ? error.message : "Unable to seek through audio.",

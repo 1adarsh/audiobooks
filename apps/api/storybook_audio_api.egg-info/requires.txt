@@ -1,7 +1,7 @@
-fastapi<1.0,>=0.115
+fastapi<1.0,>=0.165
 python-docx<2.0,>=1.1
-pypdf<7.0,>=5.0
-python-multipart<1.0,>=0.0.20
+pypdf<7.0,>=6.21
+python-multipart<1.0,>=0.0.34
 uvicorn[standard]<1.0,>=0.30
 
 [ai]

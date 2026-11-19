@@ -3,16 +3,24 @@
     "name": "Storybook Audio",
     "slug": "storybook-audio",
     "scheme": "storybook-audio",
-    "version": "0.1.5",
+    "version": "0.1.6",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "android": {
       "package": "com.storybookaudio.app",
-      "versionCode": 4
+      "versionCode": 5
     },
     "plugins": [
       "expo-router",
-      "./plugins/withAndroidSecurity"
+      "./plugins/withAndroidSecurity",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": false,
+          "recordAudioAndroid": false,
+          "enableBackgroundPlayback": false
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

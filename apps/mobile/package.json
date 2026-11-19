@@ -14,27 +14,27 @@
     "ios": "expo run:ios"
   },
   "dependencies": {
-    "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-native-async-storage/async-storage": "^3.1.1",
     "@storybook-audio/shared": "0.1.0",
-    "expo": "^58.0.0",
-    "expo-av": "~15.1.7",
+    "expo": "~58.0.26",
+    "expo-audio": "~58.0.12",
     "expo-constants": "~58.0.14",
-    "expo-document-picker": "~58.0.4",
-    "expo-linking": "~58.0.15",
-    "expo-router": "~58.0.29",
-    "expo-status-bar": "~58.0.4",
+    "expo-document-picker": "~58.0.5",
+    "expo-linking": "~58.0.17",
+    "expo-router": "~58.0.32",
+    "expo-status-bar": "~58.0.5",
     "expo-system-ui": "~58.0.7",
     "query-string": "^10.0.0",
-    "react": "19.3.0",
-    "react-dom": "19.3.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "react-native": "0.88.1",
-    "react-native-safe-area-context": "~5.10.1",
+    "react-native-safe-area-context": "~5.11.1",
     "react-native-screens": "~4.30.1",
     "react-native-web": "^0.21.4"
   },
   "devDependencies": {
     "@expo/config-plugins": "~58.0.11",
     "@types/react": "~19.3.0",
-    "typescript": "~6.0.3"
+    "typescript": "~7.0.2"
   }
 }
