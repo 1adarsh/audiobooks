@@ -206,6 +206,30 @@ jobs:
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v3
         with:
+          name: "Storybook Audio ${{ github.ref_name }}"
+          body: |
+            ## Download Storybook Audio
+
+            Storybook Audio turns story documents into chapter-based, performed audiobooks with local narration, character casting, mood analysis, and a synchronized player.
+
+            | Platform | Download |
+            | --- | --- |
+            | Android | [storybook-audio.apk](https://github.com/1adarsh/audiobooks/releases/download/${{ github.ref_name }}/storybook-audio.apk) |
+            | Web | [storybook-audio-web.zip](https://github.com/1adarsh/audiobooks/releases/download/${{ github.ref_name }}/storybook-audio-web.zip) |
+            | iOS Simulator | [storybook-audio-ios-simulator.zip](https://github.com/1adarsh/audiobooks/releases/download/${{ github.ref_name }}/storybook-audio-ios-simulator.zip) |
+
+            - Import PDF, Word, OpenDocument, HTML, Markdown, or plain text stories.
+            - Plan chapters and review character voices before conversion.
+            - Analyze mood and generate a local, chapter-based audiobook.
+            - Listen with sentence highlighting and playback speed controls.
+
+            ### Android setup
+
+            Install the APK, uninstall an older debug-signed copy first, then configure the app to use a reachable HTTPS FastAPI server. Android release builds do not allow cleartext API traffic.
+
+            ### iOS Simulator
+
+            The iOS download is a Simulator-only app bundle and cannot be installed on a physical iPhone.
           generate_release_notes: true
           files: release-assets/*
           overwrite_files: true
