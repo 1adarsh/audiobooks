@@ -9,6 +9,7 @@
     "minimatch": "11.0.9"
   },
   "scripts": {
+    "app": "npm run mobile:web",
     "mobile": "npm run start --workspace @storybook-audio/mobile",
     "mobile:web": "npm run web --workspace @storybook-audio/mobile",
     "mobile:web:export": "npm run export:web --workspace @storybook-audio/mobile",

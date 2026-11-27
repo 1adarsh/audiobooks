@@ -203,6 +203,9 @@ jobs:
           path: release-assets
           merge-multiple: true
 
+      - name: Verify Android release asset
+        run: test -s release-assets/storybook-audio.apk
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v3
         with:
@@ -234,3 +237,16 @@ jobs:
           files: release-assets/*
           overwrite_files: true
           fail_on_unmatched_files: true
+          make_latest: true
+
+      - name: Verify published Android asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          assets="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')"
+          if ! printf '%s\n' "$assets" | grep -Fxq 'storybook-audio.apk'; then
+            gh release upload "$GITHUB_REF_NAME" release-assets/storybook-audio.apk
+          fi
+          gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' \
+            | grep -Fxq 'storybook-audio.apk'

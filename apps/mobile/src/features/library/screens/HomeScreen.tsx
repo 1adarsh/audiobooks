@@ -1,13 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
-  Pressable,
+  Modal,
+  Pressable as NativePressable,
   ScrollView,
+  StatusBar,
   StyleSheet,
-  Text,
-  TextInput,
-  View,
+  Text as NativeText,
+  TextInput as NativeTextInput,
+  View as NativeView,
+  type PressableProps,
+  type TextInputProps,
+  type TextProps,
+  type ViewProps,
   type ScrollViewInstance,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -39,7 +45,178 @@ import {
 
 const playbackSpeeds = [0.75, 1, 1.25, 1.5, 2];
 const LIBRARY_STORAGE_KEY = "storybook-audio-library";
+const DISPLAY_MODE_STORAGE_KEY = "storybook-audio-display-mode";
 const MAX_LIBRARY_ITEMS = 6;
+const displayModes = [
+  { id: "light", label: "Light" },
+  { id: "dark", label: "Dark" },
+  { id: "eye-comfort", label: "Eye comfort" },
+] as const;
+type DisplayMode = (typeof displayModes)[number]["id"];
+
+function isDisplayMode(value: string | null): value is DisplayMode {
+  return displayModes.some((option) => option.id === value);
+}
+
+const DisplayModeContext = createContext<DisplayMode>("light");
+
+function getDisplayPalette(mode: DisplayMode) {
+  if (mode === "dark") {
+    return {
+      background: "#151311",
+      surface: "#211e1b",
+      raisedSurface: "#2b2521",
+      darkSurface: "#211e1b",
+      darkAccent: "#634658",
+      text: "#f1e9e2",
+      mutedText: "#c8bbb2",
+      accentText: "#edbad2",
+      border: "#4b423b",
+    };
+  }
+  if (mode === "eye-comfort") {
+    return {
+      background: "#f0e5d1",
+      surface: "#f7efdf",
+      raisedSurface: "#e9dcc3",
+      darkSurface: "#554735",
+      darkAccent: "#806541",
+      text: "#4a3b2a",
+      mutedText: "#725c42",
+      accentText: "#8a693b",
+      border: "#d3c19f",
+    };
+  }
+  return {
+    background: "#fff9f7",
+    surface: "#fffafd",
+    raisedSurface: "#f5edf3",
+    darkSurface: "#352a42",
+    darkAccent: "#9b5b80",
+    text: "#44334c",
+    mutedText: "#67566a",
+    accentText: "#9b5b80",
+    border: "#edd8e5",
+  };
+}
+
+function getColorMetrics(color: string) {
+  const match = /^#([0-9a-f]{6})$/i.exec(color);
+  if (!match) {
+    return null;
+  }
+
+  const value = match[1];
+  const red = Number.parseInt(value.slice(0, 2), 16);
+  const green = Number.parseInt(value.slice(2, 4), 16);
+  const blue = Number.parseInt(value.slice(4, 6), 16);
+  const maximum = Math.max(red, green, blue);
+  const minimum = Math.min(red, green, blue);
+  return {
+    luminance: (red * 0.299 + green * 0.587 + blue * 0.114) / 255,
+    saturation: maximum === 0 ? 0 : (maximum - minimum) / maximum,
+  };
+}
+
+function themedTextColor(color: string | undefined, mode: DisplayMode): string | undefined {
+  if (!color || mode === "light") {
+    return color;
+  }
+  const metrics = getColorMetrics(color);
+  if (!metrics || metrics.luminance >= 0.76) {
+    return color;
+  }
+
+  const palette = getDisplayPalette(mode);
+  if (metrics.luminance < 0.24) {
+    return palette.text;
+  }
+  return metrics.saturation > 0.2 ? palette.accentText : palette.mutedText;
+}
+
+function themedViewStyle(
+  style: ViewProps["style"],
+  mode: DisplayMode,
+): ViewProps["style"] {
+  if (mode === "light") {
+    return style;
+  }
+  const flattened = StyleSheet.flatten(style);
+  if (!flattened) {
+    return style;
+  }
+
+  const palette = getDisplayPalette(mode);
+  const result = { ...flattened };
+  const background = getColorMetrics(result.backgroundColor ?? "");
+  if (background) {
+    if (background.luminance > 0.78) {
+      result.backgroundColor = palette.surface;
+    } else if (background.luminance > 0.42) {
+      result.backgroundColor = palette.raisedSurface;
+    } else if (background.saturation > 0.12 && background.luminance < 0.36) {
+      result.backgroundColor = palette.darkAccent;
+    } else if (background.luminance < 0.18) {
+      result.backgroundColor = palette.darkSurface;
+    }
+  }
+
+  for (const key of ["borderColor", "borderTopColor", "borderRightColor", "borderBottomColor", "borderLeftColor"] as const) {
+    if (result[key]) {
+      result[key] = palette.border;
+    }
+  }
+  return result;
+}
+
+function Text(props: TextProps) {
+  const mode = useContext(DisplayModeContext);
+  const flattened = StyleSheet.flatten(props.style);
+  const style =
+    mode === "light" || !flattened
+      ? props.style
+      : {
+          ...flattened,
+          color: themedTextColor(flattened.color ?? getDisplayPalette(mode).text, mode),
+        };
+  return <NativeText {...props} style={style} />;
+}
+
+function View(props: ViewProps) {
+  const mode = useContext(DisplayModeContext);
+  return <NativeView {...props} style={themedViewStyle(props.style, mode)} />;
+}
+
+function Pressable(props: PressableProps) {
+  const mode = useContext(DisplayModeContext);
+  const pressableStyle = props.style;
+  const style =
+    typeof pressableStyle === "function"
+      ? (state: Parameters<NonNullable<PressableProps["style"]>>[0]) =>
+          themedViewStyle(pressableStyle(state), mode)
+      : themedViewStyle(pressableStyle, mode);
+  return <NativePressable {...props} style={style} />;
+}
+
+function TextInput(props: TextInputProps) {
+  const mode = useContext(DisplayModeContext);
+  const flattened = StyleSheet.flatten(props.style);
+  const style =
+    mode === "light" || !flattened
+      ? props.style
+      : {
+          ...flattened,
+          color: themedTextColor(flattened.color ?? getDisplayPalette(mode).text, mode),
+        };
+  return (
+    <NativeTextInput
+      {...props}
+      placeholderTextColor={themedTextColor(props.placeholderTextColor, mode)}
+      style={style}
+    />
+  );
+}
+
 const workspaceTabs = [
   { id: "story", label: "Story", hint: "Import and convert" },
   { id: "cast", label: "Characters", hint: "Review speakers" },
@@ -157,6 +334,8 @@ function buildStoryCues(
 
 export function HomeScreen() {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("story");
+  const [displayMode, setDisplayMode] = useState<DisplayMode>("light");
+  const [displayModeMessage, setDisplayModeMessage] = useState("");
   const [apiUrl, setApiUrl] = useState("");
   const [apiUrlDraft, setApiUrlDraft] = useState("");
   const [apiStatus, setApiStatus] = useState("Checking API connection…");
@@ -196,15 +375,22 @@ export function HomeScreen() {
   const [conversionError, setConversionError] = useState("");
   const [playbackMessage, setPlaybackMessage] = useState("");
   const [speedIndex, setSpeedIndex] = useState(1);
-  const [loopChapter, setLoopChapter] = useState(true);
+  const [loopAudio, setLoopAudio] = useState(false);
+  const [isReaderOpen, setIsReaderOpen] = useState(false);
+  const [isLyricsFullscreen, setIsLyricsFullscreen] = useState(false);
+  const [readerFontSize, setReaderFontSize] = useState(22);
   const audioPlayer = useAudioPlayer(null, { updateInterval: 100 });
   const audioStatus = useAudioPlayerStatus(audioPlayer);
   const audioTimingsRef = useRef<GeneratedAudio["timings"]>([]);
   const durationRef = useRef(0);
   const lyricScrollRef = useRef<ScrollViewInstance>(null);
   const lyricOffsets = useRef<Record<number, number>>({});
+  const fullScreenLyricScrollRef = useRef<ScrollViewInstance>(null);
+  const fullScreenLyricOffsets = useRef<Record<number, number>>({});
+  const displayModeTouched = useRef(false);
   const progressWidth = useRef(0);
   const conversionPulse = useRef(new Animated.Value(0.35)).current;
+  const displayPalette = useMemo(() => getDisplayPalette(displayMode), [displayMode]);
 
   useEffect(() => {
     let isMounted = true;
@@ -229,6 +415,35 @@ export function HomeScreen() {
     }
 
     void checkApiConnection();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+    async function loadDisplayMode() {
+      try {
+        const savedMode = await AsyncStorage.getItem(DISPLAY_MODE_STORAGE_KEY);
+        if (
+          isMounted &&
+          !displayModeTouched.current &&
+          isDisplayMode(savedMode)
+        ) {
+          setDisplayMode(savedMode);
+        }
+      } catch (error) {
+        if (isMounted) {
+          setDisplayModeMessage(
+            `Unable to load display preference: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+    }
+
+    void loadDisplayMode();
     return () => {
       isMounted = false;
     };
@@ -390,7 +605,14 @@ export function HomeScreen() {
         animated: true,
       });
     }
-  }, [activeCueIndex]);
+    const fullScreenLineOffset = fullScreenLyricOffsets.current[activeCueIndex];
+    if (fullScreenLineOffset !== undefined) {
+      fullScreenLyricScrollRef.current?.scrollTo({
+        y: Math.max(0, fullScreenLineOffset - 56),
+        animated: true,
+      });
+    }
+  }, [activeCueIndex, isLyricsFullscreen]);
 
   useEffect(() => {
     if (!audioStatus.isLoaded) {
@@ -454,11 +676,11 @@ export function HomeScreen() {
   }, [audioPlayer, audioStatus.isLoaded, currentSpeed]);
 
   useEffect(() => {
-    audioPlayer.loop = loopChapter;
-  }, [audioPlayer, loopChapter]);
+    audioPlayer.loop = loopAudio;
+  }, [audioPlayer, loopAudio]);
 
   useEffect(() => {
-    if (conversionStage !== "rendering") {
+    if (conversionStage !== "rendering" && !isImporting) {
       conversionPulse.setValue(0.35);
       return;
     }
@@ -479,7 +701,7 @@ export function HomeScreen() {
     );
     pulse.start();
     return () => pulse.stop();
-  }, [conversionPulse, conversionStage]);
+  }, [conversionPulse, conversionStage, isImporting]);
 
   async function clearAudio() {
     audioPlayer.pause();
@@ -510,6 +732,21 @@ export function HomeScreen() {
     } finally {
       setIsSavingApiUrl(false);
     }
+
+    async function chooseDisplayMode(mode: DisplayMode) {
+      displayModeTouched.current = true;
+      setDisplayMode(mode);
+      setDisplayModeMessage("");
+      try {
+        await AsyncStorage.setItem(DISPLAY_MODE_STORAGE_KEY, mode);
+      } catch (error) {
+        setDisplayModeMessage(
+          `Unable to save display preference: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
   }
 
   async function chooseBook() {
@@ -522,6 +759,7 @@ export function HomeScreen() {
           "text/plain",
           "text/markdown",
           "text/html",
+          "image/*",
         ],
         copyToCacheDirectory: true,
         base64: false,
@@ -543,7 +781,7 @@ export function HomeScreen() {
       try {
         await clearAudio();
         const title = file.name.replace(
-          /\.(?:pdf|odt|docx|html?|md|markdown|txt|text)$/i,
+          /\.(?:pdf|odt|docx|html?|md|markdown|txt|text|bmp|jpe?g|png|tiff?|webp)$/i,
           "",
         );
         const imported = await importStoryDocument(file);
@@ -881,7 +1119,7 @@ export function HomeScreen() {
         shouldRouteThroughEarpiece: false,
       });
       audioPlayer.volume = 1;
-      audioPlayer.loop = loopChapter;
+      audioPlayer.loop = loopAudio;
       await new Promise<void>((resolve, reject) => {
         let subscription: { remove: () => void } | undefined;
         subscription = audioPlayer.addListener(
@@ -999,13 +1237,30 @@ export function HomeScreen() {
   }
 
   return (
-    <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+    <DisplayModeContext.Provider value={displayMode}>
+      <StatusBar hidden={isReaderOpen || isLyricsFullscreen} />
+      <ScrollView
+        style={[styles.scrollView, { backgroundColor: displayPalette.background }]}
+        contentContainerStyle={styles.scrollContent}
+      >
       <View style={styles.screen}>
-        <Text style={styles.eyebrow}>YOUR STORY, PERFORMED</Text>
-        <Text style={styles.title}>Your audiobook studio.</Text>
-        <Text style={styles.description}>
-          Build the story, shape its performance, then listen—all from one place.
-        </Text>
+        <View style={styles.welcomeCard}>
+          <View style={styles.welcomeCopy}>
+            <Text style={styles.eyebrow}>YOUR STORYBOOK ATELIER</Text>
+            <Text style={styles.title}>Stories, softly brought to life.</Text>
+            <Text style={styles.description}>
+              Turn a favorite story into a warm, character-filled audiobook.
+            </Text>
+          </View>
+          <View accessible={false} style={styles.welcomeArt}>
+            <View style={styles.welcomeMoon} />
+            <Text style={styles.welcomeSparkle}>✦</Text>
+            <View style={styles.welcomeBook}>
+              <View style={styles.welcomeBookSpine} />
+              <View style={styles.welcomeBookPage} />
+            </View>
+          </View>
+        </View>
 
         <View style={styles.apiSettingsCard}>
           <Pressable
@@ -1068,6 +1323,38 @@ export function HomeScreen() {
           ) : null}
         </View>
 
+        <View style={styles.displaySettings}>
+          <Text style={styles.displayModeTitle}>Display mode</Text>
+          <View style={styles.displayModeOptions}>
+            {displayModes.map((option) => (
+              <Pressable
+                key={option.id}
+                accessibilityRole="button"
+                accessibilityState={{ selected: displayMode === option.id }}
+                onPress={() => void chooseDisplayMode(option.id)}
+                style={[
+                  styles.displayModeOption,
+                  displayMode === option.id && styles.displayModeOptionSelected,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.displayModeOptionText,
+                    displayMode === option.id && styles.displayModeOptionTextSelected,
+                  ]}
+                >
+                  {option.label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+          {displayModeMessage ? (
+            <Text accessibilityRole="alert" style={styles.displayModeMessage}>
+              {displayModeMessage}
+            </Text>
+          ) : null}
+        </View>
+
         <View style={styles.workspaceTabs} accessibilityRole="tablist">
           {workspaceTabs.map((tab) => (
             <Pressable
@@ -1123,6 +1410,33 @@ export function HomeScreen() {
                     : "Choose a story file"}
               </Text>
             </Pressable>
+            {isImporting ? (
+              <View
+                accessibilityRole="progressbar"
+                accessibilityLabel="Importing story on the API server"
+                style={styles.importProgressPanel}
+              >
+                <View style={styles.conversionHeading}>
+                  <ActivityIndicator color="#9b5b80" size="small" />
+                  <View style={styles.conversionCopy}>
+                    <Text style={styles.conversionTitle}>Preparing your story</Text>
+                    <Text style={styles.conversionDescription}>
+                      The API server is extracting text from {book?.name ?? "your document"}.
+                      Larger files may take a little while.
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.conversionTrack}>
+                  <Animated.View
+                    style={[
+                      styles.conversionFill,
+                      styles.conversionIndeterminate,
+                      { opacity: conversionPulse },
+                    ]}
+                  />
+                </View>
+              </View>
+            ) : null}
             {importError ? (
               <Text accessibilityRole="alert" style={styles.fileDetails}>
                 {importError}
@@ -1303,7 +1617,21 @@ export function HomeScreen() {
             ) : null}
 
             <View style={styles.pastePanel}>
-              <Text style={styles.pastePanelTitle}>Story text</Text>
+              <View style={styles.storyTextHeader}>
+                <Text style={styles.pastePanelTitle}>Story text</Text>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityHint="Opens the story in a distraction-free reading view"
+                  disabled={!activeStoryText}
+                  onPress={() => setIsReaderOpen(true)}
+                  style={[
+                    styles.readerModeButton,
+                    !activeStoryText && styles.buttonDisabled,
+                  ]}
+                >
+                  <Text style={styles.readerModeButtonText}>Reading mode</Text>
+                </Pressable>
+              </View>
               <TextInput
                 accessibilityLabel="Book title for saved AI preferences"
                 onChangeText={(value) => {
@@ -1748,10 +2076,11 @@ export function HomeScreen() {
           <View style={styles.toggleRow}>
             <Pressable
               accessibilityRole="button"
-              onPress={() => setLoopChapter((current) => !current)}
-              style={[styles.toggleButton, loopChapter && styles.toggleButtonActive]}
+              accessibilityState={{ selected: loopAudio }}
+              onPress={() => setLoopAudio((current) => !current)}
+              style={[styles.toggleButton, loopAudio && styles.toggleButtonActive]}
             >
-              <Text style={styles.toggleText}>Loop audio</Text>
+              <Text style={styles.toggleText}>Repeat audiobook</Text>
             </Pressable>
             <Pressable
               accessibilityRole="button"
@@ -1764,7 +2093,17 @@ export function HomeScreen() {
           </View>
 
           <View style={styles.lyricsSection}>
-            <Text style={styles.lyricsTitle}>Follow the story</Text>
+            <View style={styles.lyricsHeader}>
+              <Text style={styles.lyricsTitle}>Follow the story</Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityHint="Opens synchronized lyrics in a full-screen view"
+                onPress={() => setIsLyricsFullscreen(true)}
+                style={styles.readerModeButton}
+              >
+                <Text style={styles.readerModeButtonText}>Full screen</Text>
+              </Pressable>
+            </View>
             <Text style={styles.lyricsHint}>
               The current sentence scrolls into view. Word highlighting follows the audio position.
             </Text>
@@ -1836,13 +2175,163 @@ export function HomeScreen() {
           </>
         ) : null}
       </View>
-    </ScrollView>
+      </ScrollView>
+      <Modal
+        animationType="slide"
+        onRequestClose={() => setIsReaderOpen(false)}
+        presentationStyle="fullScreen"
+        visible={isReaderOpen}
+      >
+        <View style={styles.readerScreen}>
+          <View style={styles.readerToolbar}>
+            <Text style={styles.readerTitle} numberOfLines={1}>
+              {bookTitle}
+            </Text>
+            <View style={styles.readerToolbarActions}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Decrease reading text size"
+                accessibilityState={{ disabled: readerFontSize <= 16 }}
+                disabled={readerFontSize <= 16}
+                onPress={() => setReaderFontSize((size) => Math.max(16, size - 2))}
+                style={styles.readerActionButton}
+              >
+                <Text style={styles.readerActionText}>A−</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Increase reading text size"
+                accessibilityState={{ disabled: readerFontSize >= 32 }}
+                disabled={readerFontSize >= 32}
+                onPress={() => setReaderFontSize((size) => Math.min(32, size + 2))}
+                style={styles.readerActionButton}
+              >
+                <Text style={styles.readerActionText}>A+</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setIsReaderOpen(false)}
+                style={styles.readerActionButton}
+              >
+                <Text style={styles.readerActionText}>Done</Text>
+              </Pressable>
+            </View>
+          </View>
+          <ScrollView contentContainerStyle={styles.readerScrollContent}>
+            <Text
+              style={[
+                styles.readerText,
+                { fontSize: readerFontSize, lineHeight: readerFontSize * 1.65 },
+              ]}
+            >
+              {activeStoryText}
+            </Text>
+          </ScrollView>
+        </View>
+      </Modal>
+      <Modal
+        animationType="slide"
+        onRequestClose={() => setIsLyricsFullscreen(false)}
+        presentationStyle="fullScreen"
+        visible={isLyricsFullscreen}
+      >
+        <View style={styles.readerScreen}>
+          <View style={styles.readerToolbar}>
+            <View style={styles.fullScreenLyricsHeading}>
+              <Text style={styles.readerTitle} numberOfLines={1}>
+                Lyrics
+              </Text>
+              <Text style={styles.fullScreenLyricsBook} numberOfLines={1}>
+                {bookTitle}
+              </Text>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setIsLyricsFullscreen(false)}
+              style={styles.readerActionButton}
+            >
+              <Text style={styles.readerActionText}>Done</Text>
+            </Pressable>
+          </View>
+          <ScrollView
+            ref={fullScreenLyricScrollRef}
+            contentContainerStyle={styles.fullScreenLyricsContent}
+          >
+            {generatedCues.map((cue, index) => (
+              <View
+                key={cue.id}
+                onLayout={(event) => {
+                  const offset = event.nativeEvent.layout.y;
+                  fullScreenLyricOffsets.current[index] = offset;
+                  if (index === activeCueIndex) {
+                    fullScreenLyricScrollRef.current?.scrollTo({
+                      y: Math.max(0, offset - 56),
+                      animated: true,
+                    });
+                  }
+                }}
+                style={[
+                  styles.lyricRow,
+                  activeCueIndex === index && styles.lyricRowActive,
+                ]}
+              >
+                <View style={styles.lyricMeta}>
+                  <Text style={styles.lyricSpeaker}>{cue.speaker}</Text>
+                  <Text style={styles.lyricTime}>{cue.timestamp}</Text>
+                </View>
+                <Text style={styles.fullScreenLyricText} accessibilityRole="text">
+                  {[...cue.text.matchAll(/\S+\s*/g)].map(([word], wordIndex) => (
+                    <Text
+                      key={`${cue.id}-full-screen-word-${wordIndex}`}
+                      style={[
+                        styles.lyricWord,
+                        activeCueIndex === index &&
+                          activeWordIndex === wordIndex &&
+                          styles.lyricWordActive,
+                      ]}
+                    >
+                      {word}
+                    </Text>
+                  ))}
+                </Text>
+              </View>
+            ))}
+          </ScrollView>
+          <View style={styles.fullScreenTransport}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Previous sentence"
+              onPress={() => void seekToCue(activeCueIndex - 1)}
+              style={styles.transportButton}
+            >
+              <Text style={styles.transportButtonText}>|◀</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={isPlaying ? "Pause narration" : "Play narration"}
+              onPress={handlePlayToggle}
+              style={styles.playButton}
+            >
+              <Text style={styles.playButtonText}>{isPlaying ? "Pause" : "Play"}</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Next sentence"
+              onPress={() => void seekToCue(activeCueIndex + 1)}
+              style={styles.transportButton}
+            >
+              <Text style={styles.transportButtonText}>▶|</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+    </DisplayModeContext.Provider>
   );
 }
 
 const styles = StyleSheet.create({
   scrollView: {
-    backgroundColor: "#fbf8f2",
+    backgroundColor: "#fff9f7",
     flex: 1,
   },
   scrollContent: {
@@ -1850,35 +2339,106 @@ const styles = StyleSheet.create({
   },
   screen: {
     alignSelf: "center",
-    backgroundColor: "#fbf8f2",
+    backgroundColor: "#fff9f7",
     flex: 1,
     maxWidth: 720,
     padding: 28,
     width: "100%",
   },
+  welcomeCard: {
+    alignItems: "center",
+    backgroundColor: "#f7eaf1",
+    borderColor: "#edd8e5",
+    borderRadius: 26,
+    borderWidth: 1,
+    flexDirection: "row",
+    marginBottom: 18,
+    marginTop: 16,
+    minHeight: 206,
+    overflow: "hidden",
+    padding: 20,
+  },
+  welcomeCopy: {
+    flex: 1,
+    zIndex: 1,
+  },
+  welcomeArt: {
+    alignItems: "center",
+    height: 138,
+    justifyContent: "center",
+    marginLeft: -10,
+    position: "relative",
+    width: 92,
+  },
+  welcomeMoon: {
+    backgroundColor: "#f3d9bd",
+    borderRadius: 70,
+    height: 112,
+    opacity: 0.9,
+    position: "absolute",
+    right: -28,
+    top: 0,
+    width: 132,
+  },
+  welcomeSparkle: {
+    color: "#a65f83",
+    fontSize: 24,
+    position: "absolute",
+    right: 6,
+    top: 12,
+  },
+  welcomeBook: {
+    backgroundColor: "#9b5b80",
+    borderColor: "#fff8fb",
+    borderRadius: 8,
+    borderWidth: 3,
+    height: 94,
+    justifyContent: "center",
+    marginTop: 34,
+    position: "relative",
+    transform: [{ rotate: "-8deg" }],
+    width: 72,
+  },
+  welcomeBookSpine: {
+    backgroundColor: "#754364",
+    height: "100%",
+    left: 10,
+    position: "absolute",
+    width: 3,
+  },
+  welcomeBookPage: {
+    borderColor: "#f6dcb7",
+    borderRadius: 999,
+    borderTopWidth: 2,
+    height: 20,
+    marginLeft: 26,
+    marginTop: -4,
+    transform: [{ rotate: "-28deg" }],
+    width: 20,
+  },
   eyebrow: {
-    color: "#795548",
+    color: "#9b5b80",
     fontSize: 12,
     fontWeight: "700",
     letterSpacing: 1.5,
-    marginTop: 24,
+    marginTop: 0,
   },
   title: {
-    color: "#28231f",
-    fontSize: 36,
+    color: "#44334c",
+    fontSize: 27,
     fontWeight: "700",
-    marginTop: 10,
-  },
-  description: {
-    color: "#655e56",
-    fontSize: 16,
-    lineHeight: 24,
-    marginBottom: 14,
     marginTop: 12,
   },
+  description: {
+    color: "#67566a",
+    fontSize: 14,
+    lineHeight: 21,
+    marginBottom: 0,
+    marginTop: 10,
+  },
   apiSettingsCard: {
-    backgroundColor: "#f0e9df",
-    borderRadius: 12,
+    backgroundColor: "#f5edf3",
+    borderRadius: 18,
     marginBottom: 16,
     padding: 14,
   },
@@ -1944,9 +2504,48 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "700",
   },
-  workspaceTabs: {
-    backgroundColor: "#eee7df",
+  displaySettings: {
+    backgroundColor: "#f5edf3",
     borderRadius: 16,
+    marginTop: 12,
+    padding: 12,
+  },
+  displayModeTitle: {
+    color: "#44334c",
+    fontSize: 13,
+    fontWeight: "700",
+    marginBottom: 8,
+  },
+  displayModeOptions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  displayModeOption: {
+    backgroundColor: "#eee7df",
+    borderRadius: 999,
+    paddingHorizontal: 13,
+    paddingVertical: 8,
+  },
+  displayModeOptionSelected: {
+    backgroundColor: "#9b5b80",
+  },
+  displayModeOptionText: {
+    color: "#4b3027",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  displayModeOptionTextSelected: {
+    color: "#ffffff",
+  },
+  displayModeMessage: {
+    color: "#842e1b",
+    fontSize: 12,
+    marginTop: 8,
+  },
+  workspaceTabs: {
+    backgroundColor: "#f0eaf3",
+    borderRadius: 18,
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
@@ -1961,7 +2560,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   workspaceTabActive: {
-    backgroundColor: "#ffffff",
+    backgroundColor: "#fffafd",
     elevation: 1,
     shadowColor: "#352722",
     shadowOffset: { width: 0, height: 2 },
@@ -2002,8 +2601,8 @@ const styles = StyleSheet.create({
   },
   pickButton: {
     alignSelf: "flex-start",
-    backgroundColor: "#6d4c41",
-    borderRadius: 10,
+    backgroundColor: "#9b5b80",
+    borderRadius: 14,
     paddingHorizontal: 18,
     paddingVertical: 13,
   },
@@ -2106,8 +2705,8 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
   },
   voiceStyleButtonActive: {
-    backgroundColor: "#6d4c41",
-    borderColor: "#6d4c41",
+    backgroundColor: "#9b5b80",
+    borderColor: "#9b5b80",
   },
   voiceStyleButtonText: {
     color: "#4b3027",
@@ -2126,6 +2725,23 @@ const styles = StyleSheet.create({
   pastePanelTitle: {
     color: "#3d342d",
     fontSize: 17,
+    fontWeight: "700",
+  },
+  storyTextHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  readerModeButton: {
+    backgroundColor: "#eadce7",
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  readerModeButtonText: {
+    color: "#68405f",
+    fontSize: 12,
     fontWeight: "700",
   },
   pastePanelDescription: {
@@ -2203,8 +2819,8 @@ const styles = StyleSheet.create({
   },
   primaryButton: {
     alignSelf: "flex-start",
-    backgroundColor: "#3d342d",
-    borderRadius: 10,
+    backgroundColor: "#554365",
+    borderRadius: 14,
     marginTop: 8,
     paddingHorizontal: 16,
     paddingVertical: 12,
@@ -2216,8 +2832,8 @@ const styles = StyleSheet.create({
   },
   secondaryButton: {
     alignSelf: "flex-start",
-    backgroundColor: "#e5d7ca",
-    borderRadius: 10,
+    backgroundColor: "#f0e3ed",
+    borderRadius: 14,
     marginTop: 8,
     paddingHorizontal: 16,
     paddingVertical: 12,
@@ -2228,11 +2844,19 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   conversionPanel: {
-    backgroundColor: "#ffffff",
-    borderColor: "#e3d6c9",
-    borderRadius: 12,
+    backgroundColor: "#fffafd",
+    borderColor: "#edd8e5",
+    borderRadius: 16,
     borderWidth: 1,
     marginTop: 16,
+    padding: 14,
+  },
+  importProgressPanel: {
+    backgroundColor: "#fffafd",
+    borderColor: "#edd8e5",
+    borderRadius: 16,
+    borderWidth: 1,
+    marginTop: 14,
     padding: 14,
   },
   conversionHeading: {
@@ -2254,14 +2878,14 @@ const styles = StyleSheet.create({
     marginTop: 3,
   },
   conversionTrack: {
-    backgroundColor: "#eee7df",
+    backgroundColor: "#f0e6f0",
     borderRadius: 99,
     height: 7,
     marginTop: 14,
     overflow: "hidden",
   },
   conversionFill: {
-    backgroundColor: "#9b5b43",
+    backgroundColor: "#bd789a",
     borderRadius: 99,
     height: "100%",
   },
@@ -2420,8 +3044,8 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   soundCard: {
-    backgroundColor: "#2d1e1a",
-    borderRadius: 18,
+    backgroundColor: "#3d3049",
+    borderRadius: 22,
     marginTop: 12,
     padding: 20,
   },
@@ -2438,8 +3062,8 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   emptyState: {
-    backgroundColor: "#f0e9df",
-    borderRadius: 16,
+    backgroundColor: "#f5edf3",
+    borderRadius: 20,
     marginTop: 20,
     padding: 20,
   },
@@ -2449,8 +3073,8 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   posterCard: {
-    backgroundColor: "#261a1d",
-    borderRadius: 22,
+    backgroundColor: "#392c46",
+    borderRadius: 26,
     height: 180,
     marginTop: 26,
     overflow: "hidden",
@@ -2464,12 +3088,12 @@ const styles = StyleSheet.create({
     width: 180,
   },
   posterGlowOne: {
-    backgroundColor: "rgba(111, 58, 68, 0.95)",
+    backgroundColor: "rgba(171, 102, 143, 0.92)",
     right: -30,
     top: -10,
   },
   posterGlowTwo: {
-    backgroundColor: "rgba(219, 152, 104, 0.8)",
+    backgroundColor: "rgba(239, 190, 158, 0.78)",
     left: -30,
     bottom: -10,
   },
@@ -2498,8 +3122,8 @@ const styles = StyleSheet.create({
     marginTop: 20,
   },
   playerCard: {
-    backgroundColor: "#2d1e1a",
-    borderRadius: 20,
+    backgroundColor: "#352a42",
+    borderRadius: 24,
     marginTop: 28,
     padding: 18,
   },
@@ -2521,7 +3145,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   playButton: {
-    backgroundColor: "#f1b790",
+    backgroundColor: "#f2c3d6",
     borderRadius: 999,
     paddingHorizontal: 18,
     paddingVertical: 10,
@@ -2586,7 +3210,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   speedChipActive: {
-    backgroundColor: "#f5b286",
+    backgroundColor: "#efbad1",
   },
   speedChipText: {
     color: "#f8efe9",
@@ -2608,7 +3232,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   toggleButtonActive: {
-    backgroundColor: "#6f4838",
+    backgroundColor: "#78516f",
   },
   toggleText: {
     color: "#f7efe8",
@@ -2631,7 +3255,7 @@ const styles = StyleSheet.create({
     minHeight: 16,
   },
   waveBarActive: {
-    backgroundColor: "#f6c7a4",
+    backgroundColor: "#efbad1",
   },
   progressTrack: {
     backgroundColor: "#5b403b",
@@ -2641,7 +3265,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   progressFill: {
-    backgroundColor: "#f5b286",
+    backgroundColor: "#efbad1",
     borderRadius: 999,
     height: "100%",
   },
@@ -2676,6 +3300,12 @@ const styles = StyleSheet.create({
   lyricsSection: {
     marginTop: 20,
   },
+  lyricsHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 10,
+  },
   lyricsTitle: {
     color: "#fdfaf6",
     fontSize: 15,
@@ -2699,8 +3329,8 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   lyricRowActive: {
-    backgroundColor: "rgba(246,199,164,0.1)",
-    borderLeftColor: "#f6c7a4",
+    backgroundColor: "rgba(239,186,209,0.12)",
+    borderLeftColor: "#efbad1",
     borderLeftWidth: 4,
     borderRadius: 8,
   },
@@ -2733,6 +3363,81 @@ const styles = StyleSheet.create({
     backgroundColor: "#f6c7a4",
     color: "#2a1c18",
     fontWeight: "800",
+  },
+  readerScreen: {
+    backgroundColor: "#fff9f7",
+    flex: 1,
+    paddingBottom: 16,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+  },
+  readerToolbar: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 12,
+    marginBottom: 16,
+  },
+  readerTitle: {
+    color: "#44334c",
+    flex: 1,
+    fontSize: 20,
+    fontWeight: "700",
+  },
+  readerToolbarActions: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 6,
+  },
+  readerActionButton: {
+    alignItems: "center",
+    backgroundColor: "#eadce7",
+    borderRadius: 999,
+    justifyContent: "center",
+    minHeight: 40,
+    minWidth: 42,
+    paddingHorizontal: 12,
+  },
+  readerActionText: {
+    color: "#68405f",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  readerScrollContent: {
+    alignSelf: "center",
+    maxWidth: 720,
+    paddingBottom: 32,
+    width: "100%",
+  },
+  readerText: {
+    color: "#44334c",
+    fontSize: 22,
+    lineHeight: 36,
+  },
+  fullScreenLyricsHeading: {
+    flex: 1,
+  },
+  fullScreenLyricsBook: {
+    color: "#67566a",
+    fontSize: 12,
+    marginTop: 3,
+  },
+  fullScreenLyricsContent: {
+    alignSelf: "center",
+    maxWidth: 720,
+    paddingBottom: 24,
+    width: "100%",
+  },
+  fullScreenLyricText: {
+    color: "#44334c",
+    fontSize: 22,
+    lineHeight: 36,
+  },
+  fullScreenTransport: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-around",
+    paddingTop: 12,
   },
   note: {
     backgroundColor: "#f0e9df",

@@ -165,6 +165,43 @@ def _extract_pdf_text(content: bytes) -> str:
     )
 
 
+def _extract_image_text(content: bytes) -> str:
+    if pytesseract is None:
+        raise ValueError(
+            "Image OCR support is not installed. Install the OCR dependencies to import images."
+        )
+
+    try:
+        from PIL import Image, UnidentifiedImageError
+    except ImportError as error:  # pragma: no cover - optional OCR dependency
+        raise ValueError(
+            "Image OCR support is not installed. Install the OCR dependencies to import images."
+        ) from error
+
+    try:
+        with Image.open(BytesIO(content)) as image:
+            text = pytesseract.image_to_string(image).strip()
+    except UnidentifiedImageError as error:
+        raise ValueError("The selected file is not a valid image.") from error
+    except pytesseract.TesseractNotFoundError as error:
+        raise ValueError(
+            "Tesseract is not installed. Install the Tesseract OCR application to import images."
+        ) from error
+    except pytesseract.TesseractError as error:
+        raise ValueError(
+            "OCR could not read this image. Try a sharper, well-lit image with the text upright."
+        ) from error
+    except (OSError, ValueError) as error:
+        raise ValueError("The selected image could not be opened.") from error
+
+    if not text:
+        raise ValueError(
+            "No text could be recognized in this image. Try a sharper, well-lit image "
+            "with the text upright, or paste the story manually."
+        )
+    return text
+
+
 def _extract_docx_text(content: bytes) -> str:
     try:
         with ZipFile(BytesIO(content)) as archive:
@@ -209,6 +246,8 @@ def extract_story_text(filename: str, content: bytes) -> str:
         text = _extract_odt_text(content)
     elif extension == ".pdf":
         text = _extract_pdf_text(content)
+    elif extension in {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}:
+        text = _extract_image_text(content)
     elif extension == ".docx":
         text = _extract_docx_text(content)
     elif extension in {".html", ".htm"}:
@@ -220,7 +259,8 @@ def extract_story_text(filename: str, content: bytes) -> str:
             raise ValueError("The selected text document must use UTF-8 encoding.") from error
     else:
         raise ValueError(
-            "Unsupported file type. Choose a PDF, DOCX, ODT, HTML, Markdown, or UTF-8 text file."
+            "Unsupported file type. Choose a PDF, image, DOCX, ODT, HTML, Markdown, "
+            "or UTF-8 text file."
         )
 
     if not text.strip():

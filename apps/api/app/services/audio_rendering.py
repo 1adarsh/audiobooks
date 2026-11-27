@@ -9,8 +9,10 @@ import subprocess
 import tempfile
 import uuid
 import wave
+from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import lru_cache
+from itertools import chain
 from pathlib import Path
 
 from app.services.piper_voices import get_piper_voice_path
@@ -226,9 +228,8 @@ def render_audio(
     output_path = OUTPUT_DIRECTORY / f"{audio_id}.wav"
     output = io.BytesIO()
     sentence_timings: list[SentenceTiming] = []
-    with wave.open(output, "wb") as combined:
-        sample_params: wave._wave_params | None = None
-        written_frames = 0
+
+    def synthesized_sentences() -> Iterator[tuple[int, str, bytes]]:
         for sentence_index, sentence in enumerate(sentences):
             profile = (
                 sentence_voice_profiles[sentence_index]
@@ -260,6 +261,24 @@ def render_audio(
                     timeout=30,
                 )
                 wav_data = result.stdout
+            yield sentence_index, sentence, wav_data
+
+    sentence_audio = iter(synthesized_sentences())
+    first_sentence_audio = next(sentence_audio)
+    with wave.open(io.BytesIO(first_sentence_audio[2]), "rb") as first_audio:
+        sample_params = first_audio.getparams()
+        if first_audio.getnframes() == 0:
+            raise RuntimeError("Speech synthesis returned empty audio.")
+
+    with wave.open(output, "wb") as combined:
+        combined.setnchannels(sample_params.nchannels)
+        combined.setsampwidth(sample_params.sampwidth)
+        combined.setframerate(sample_params.framerate)
+        written_frames = 0
+        for sentence_index, sentence, wav_data in chain(
+            (first_sentence_audio,),
+            sentence_audio,
+        ):
             with wave.open(io.BytesIO(wav_data), "rb") as chapter_audio:
                 params = chapter_audio.getparams()
                 pcm = chapter_audio.readframes(chapter_audio.getnframes())
@@ -267,12 +286,7 @@ def render_audio(
                 frame_count = len(pcm) // frame_size
                 if frame_count == 0:
                     raise RuntimeError("Speech synthesis returned empty audio.")
-                if sample_params is None:
-                    sample_params = params
-                    combined.setnchannels(params.nchannels)
-                    combined.setsampwidth(params.sampwidth)
-                    combined.setframerate(params.framerate)
-                elif params[:3] != sample_params[:3]:
+                if params[:3] != sample_params[:3]:
                     raise RuntimeError("Audio chapters have incompatible WAV formats.")
                 active_start, active_end = _active_audio_frame_range(pcm, params.nchannels)
                 sentence_start = written_frames / params.framerate

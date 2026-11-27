@@ -32,8 +32,11 @@ Requirements: Node.js and npm; Python 3.11+ for the API.
 
 ```sh
 npm install
-npm run mobile
+npm run app
 ```
+
+`npm run app` starts the web app locally. Use `npm run mobile` to start the
+Expo development server for a native device or emulator.
 
 In another terminal:
 
@@ -41,7 +44,7 @@ In another terminal:
 cd apps/api
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[neural-voice]"
+python -m pip install -e ".[ocr,neural-voice]"
 python -m app.services.download_voice_models
 uvicorn app.main:app --reload
 ```
@@ -70,10 +73,14 @@ explicit chapter headings when your story already contains them. Use
 **Suggest chapter breaks** in the Chapters tab to preview the plan; conversion
 uses the chosen boundaries for chapter pauses and player labels.
 
-To make audio in the app, choose a PDF, Word (`.docx`), OpenDocument Text
+To make audio in the app, choose a PDF, image, Word (`.docx`), OpenDocument Text
 (`.odt`), HTML, Markdown, or UTF-8 text file to import its text, or paste story
-text and choose **Use this story**. Select **Gentle** narration for the softer
-default voice, or **Expressive** when you want a livelier delivery. Then choose
+text and choose **Use this story**. Images and scanned PDFs use the optional OCR
+dependencies and a local Tesseract installation. OCR works best on clear,
+well-lit images of upright printed text; handwriting, especially cursive, may
+need manual correction in the story text field. Select **Gentle** narration for
+the softer default voice, or **Expressive** when you want a livelier delivery.
+Then choose
 **Convert to audiobook**; the progress indicator shows upload and rendering
 status. When conversion finishes, tap **Play** to start audio on the device's
 selected output (including connected Bluetooth devices). Sentence timings from
@@ -104,13 +111,14 @@ computer or hosted server the phone can reach.
 
 [Open the latest release page](https://github.com/1adarsh/audiobooks/releases/latest)
 
-To publish a new download, push a version tag such as `v0.1.6`; GitHub Actions
-builds the production-signed APK, iOS Simulator app bundle, and web ZIP, then
-attaches the assets to that GitHub release. APK and web publishing continue if
-the optional iOS Simulator build fails. GitHub Pages deployment is optional and
-does not block a release: to enable it, configure the repository's Pages source
-as **GitHub Actions** and set the Actions variable `DEPLOY_GITHUB_PAGES` to
-`true`.
+To publish a new download, push a tag matching the app version (currently
+`v0.1.6`). GitHub Actions builds the production-signed APK, iOS Simulator app
+bundle, and web ZIP, then attaches the assets and marks that release as latest.
+The workflow verifies that the Android APK is attached before succeeding. APK
+and web publishing continue if the optional iOS Simulator build fails. GitHub
+Pages deployment is optional and does not block a release: to enable it,
+configure the repository's Pages source as **GitHub Actions** and set the
+Actions variable `DEPLOY_GITHUB_PAGES` to `true`.
 
 Before creating a release, add these repository Actions secrets for Android
 signing: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`,

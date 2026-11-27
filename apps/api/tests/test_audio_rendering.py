@@ -158,6 +158,25 @@ class AudioRenderingTests(unittest.TestCase):
             self.assertEqual(len(timings), 1)
             self.assertTrue((Path(output_directory) / f"{audio_id}.wav").is_file())
 
+    def test_neural_synthesis_error_is_not_masked_by_wav_writer(self) -> None:
+        with tempfile.TemporaryDirectory() as output_directory:
+            with (
+                patch.dict(os.environ, {"STORYBOOK_TTS_ENGINE": "neural"}),
+                patch(
+                    "app.services.audio_rendering._synthesize_with_piper",
+                    side_effect=RuntimeError("Neural voice dependencies are missing."),
+                ),
+                patch(
+                    "app.services.audio_rendering.OUTPUT_DIRECTORY",
+                    Path(output_directory),
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "Neural voice dependencies are missing",
+                ):
+                    render_audio("A little story.", 1)
+
     def test_audio_has_valid_duration_and_sentence_word_timings(self) -> None:
         result = subprocess.CompletedProcess(args=[], returncode=0, stdout=make_wav(), stderr=b"")
         with tempfile.TemporaryDirectory() as output_directory:

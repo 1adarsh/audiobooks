@@ -4,6 +4,7 @@ import zipfile
 from unittest.mock import MagicMock, patch
 
 from docx import Document
+from PIL import Image
 
 from app.services.story_import import extract_story_text
 
@@ -29,6 +30,11 @@ class StoryImportTests(unittest.TestCase):
         document.add_paragraph("The story begins.")
         output = io.BytesIO()
         document.save(output)
+        return output.getvalue()
+
+    def create_png(self) -> bytes:
+        output = io.BytesIO()
+        Image.new("RGB", (4, 4), color="white").save(output, format="PNG")
         return output.getvalue()
 
     def test_extracts_paragraphs_and_preserves_open_document_spaces(self) -> None:
@@ -77,6 +83,23 @@ class StoryImportTests(unittest.TestCase):
             extract_story_text("chapter.pdf", b"%PDF-1.4"),
             "Scanned page text",
         )
+
+    @patch("app.services.story_import.pytesseract")
+    def test_extracts_text_from_image_with_ocr(self, pytesseract) -> None:
+        pytesseract.image_to_string.return_value = "Handwritten story text"
+
+        self.assertEqual(
+            extract_story_text("story.png", self.create_png()),
+            "Handwritten story text",
+        )
+        pytesseract.image_to_string.assert_called_once()
+
+    @patch("app.services.story_import.pytesseract")
+    def test_reports_when_image_has_no_recognized_text(self, pytesseract) -> None:
+        pytesseract.image_to_string.return_value = " \n "
+
+        with self.assertRaisesRegex(ValueError, "No text could be recognized"):
+            extract_story_text("story.png", self.create_png())
 
     def test_extracts_plain_markdown_and_html_text(self) -> None:
         self.assertEqual(
